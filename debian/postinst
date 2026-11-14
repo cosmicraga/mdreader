@@ -1,4 +1,5 @@
 #!/bin/sh
 set -e
 command -v update-desktop-database >/dev/null && update-desktop-database -q /usr/share/applications || true
+command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
 echo "Markdown Reader installed. Run 'mdview --default' once to open .md files with it on double-click."

@@ -2,9 +2,13 @@
 """mdview FILE.md ...   open Markdown files in the Markdown Reader (browser)
    mdview --default    make Markdown Reader the default app for .md files
    mdview --stop       stop the live-reload watcher
-   mdview --clean      stop the watcher and delete all saved pages (keeps recent list and positions)"""
-import sys, os, json, time, html, re, hashlib, subprocess, pathlib, shutil
+   mdview --clean      stop the watcher and delete all saved pages (keeps recent list and positions)
+   mdview              (no file, e.g. from the app grid) choose files in a file picker"""
+import sys, os, json, time, html, re, hashlib, hmac, secrets, base64, signal, threading, subprocess, pathlib, shutil
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
+
+os.umask(0o077)                          # every file mdview writes is private (pages hold the note text)
 
 HOME = pathlib.Path.home()
 BASE = HOME / "mdreader"                 # visible folder: snap Firefox cannot read hidden dirs or /tmp
@@ -12,6 +16,14 @@ VIEWS = BASE / "views"
 RECENT = BASE / "recent.json"
 WATCH = BASE / "watch.json"              # files the live-reload watcher follows
 PIDFILE = BASE / "watch.pid"
+SERVERJ = BASE / "server.json"           # {pid, port} of the save helper (inside the watcher)
+SERVERJS = VIEWS / "server.js"           # same port, readable by the pages (script tag)
+SECRET = BASE / "secret"                 # key for per-file save tokens
+BACKUPS = BASE / "backups"               # copy of a file before each save
+LIB = pathlib.Path("/usr/share/mdreader/lib")
+if not LIB.is_dir():
+    LIB = BASE / "lib"
+LIBS = ("marked.min.js", "purify.min.js", "highlight.min.js", "tex-svg-full.min.js", "mermaid.min.js")
 TEMPLATE = pathlib.Path("/usr/share/mdreader/reader.html")
 if not TEMPLATE.exists():                # fallback for a home-folder install
     TEMPLATE = BASE / "reader.html"
@@ -24,6 +36,8 @@ MAX_DEPTH = 2                            # subfolder levels included in the fold
 SKIP_DIRS = {"node_modules", "build", "dist", "venv", "__pycache__", "_archive"}
 KEEP_DAYS = 2                            # views not refreshed for this long are deleted
 WATCH_HOURS = 24                         # a file is watched this long after it was last prepared
+BACKUP_DAYS = 30
+MAX_SAVE = 8 * 1024 * 1024               # largest body the save helper accepts
 
 
 # ---------- helpers ----------
@@ -51,7 +65,27 @@ def write_atomic(path, text):
 
 
 def js_json(obj):
-    return json.dumps(obj).replace("</", "<\\/")
+    """JSON that is safe inside <script>: no <, >, & or line separators left as raw characters."""
+    return (json.dumps(obj).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+            .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
+
+
+def secret():
+    try:
+        return bytes.fromhex(SECRET.read_text().strip())
+    except Exception:
+        k = secrets.token_bytes(32)
+        try:
+            fd = os.open(SECRET, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.write(fd, k.hex().encode()); os.close(fd)
+            return k
+        except FileExistsError:
+            return bytes.fromhex(SECRET.read_text().strip())
+
+
+def token(p, key):
+    """per-file save token: a page can only save its own file"""
+    return hmac.new(key, str(p).encode(), hashlib.sha256).hexdigest()
 
 
 def collect(root):
@@ -86,7 +120,37 @@ def load_json(path, default):
 
 
 # ---------- page building ----------
-def write_view(p, folder, root, recent, template):
+def offline_template(t):
+    """use the libraries shipped in LIB instead of cdnjs / Google Fonts. Returns (template, offline?)."""
+    if not all((LIB / n).is_file() for n in LIBS):
+        return t, False
+
+    def lib(m):
+        name = m.group(1).rsplit("/", 1)[-1]
+        return f'<script src="{(LIB / name).as_uri()}"></script>' if name in LIBS else ""
+    t = re.sub(r'<script src="https://cdnjs\.cloudflare\.com/ajax/libs/([^"]+)"[^>]*></script>', lib, t)
+    t = re.sub(r'<link rel="preconnect"[^>]*>\n?', "", t)
+    fonts = LIB / "fonts.css"
+    t = re.sub(r'<link href="https://fonts\.googleapis\.com/[^"]*" rel="stylesheet">',
+               f'<link href="{fonts.as_uri()}" rel="stylesheet">' if fonts.is_file() else "", t)
+    return t, True
+
+
+def csp(page):
+    """scripts only from file: and the exact inline scripts of this page (hashes): no network, no injected handlers"""
+    hs = " ".join("'sha256-%s'" % base64.b64encode(hashlib.sha256(x.encode()).digest()).decode()
+                  for x in re.findall(r"<script>(.*?)</script>", page, re.S))
+    return ("default-src 'none'; script-src file: " + hs + "; style-src file: 'unsafe-inline'; font-src file: data:; "
+            "img-src file: data: blob: https:; connect-src http://127.0.0.1:*; base-uri file:; "
+            "form-action 'none'; frame-src 'none'; object-src 'none'")
+
+
+def head_insert(page, text):
+    m = '<meta charset="utf-8">'
+    return page.replace(m, m + "\n" + text, 1) if m in page else page.replace("<head>", "<head>\n" + text, 1)
+
+
+def write_view(p, folder, root, recent, template, offline=False, key=b""):
     try:
         text = p.read_text(encoding="utf-8", errors="replace")
         mt = mtime(p)
@@ -94,15 +158,130 @@ def write_view(p, folder, root, recent, template):
         return None
     data = {
         "text": text, "name": p.name, "path": str(p), "dir": str(p.parent), "root": str(root),
-        "mtime": mt, "live": live_path(p).as_uri(),
+        "mtime": mt, "live": live_path(p).as_uri(), "srv": SERVERJS.as_uri(), "tok": token(p, key) if key else "",
         "folder": [{"name": str(f.relative_to(root)), "path": str(f), "view": view_path(f).as_uri()} for f in folder],
         "recent": [{"name": r.name, "path": str(r), "dir": str(r.parent), "view": view_path(r).as_uri()} for r in recent],
     }
     base_href = html.escape(p.parent.as_uri() + "/", quote=True)   # relative images resolve next to the .md
     inject = f'<base href="{base_href}">\n<script>window.__MD={js_json(data)};</script>\n'
-    write_atomic(view_path(p), template.replace("<head>", "<head>\n" + inject, 1))
+    page = head_insert(template, inject)
+    if offline:
+        page = head_insert(page, f'<meta http-equiv="Content-Security-Policy" content="{csp(page)}">\n')
+    write_atomic(view_path(p), page)
     write_atomic(live_path(p), f"window.__mdLive&&__mdLive({js_json(mt)},null);")
     return mt
+
+
+# ---------- save helper (runs inside the watcher, 127.0.0.1 only) ----------
+def active_watch():
+    now = time.time()
+    return {p: v for p, v in load_json(WATCH, {}).items() if now - v.get("t", 0) < WATCH_HOURS * 3600}
+
+
+def save_file(req, key):
+    """write the edited text back. Returns (http status, reply)."""
+    path, tok, text = req.get("path"), req.get("tok"), req.get("text")
+    if not isinstance(path, str) or not isinstance(tok, str) or not isinstance(text, str):
+        return 400, {"error": "bad request"}
+    if not hmac.compare_digest(tok, token(path, key)):
+        return 403, {"error": "wrong token"}
+    if path not in active_watch():
+        return 403, {"error": "file not open in the reader any more: run mdview on it again"}
+    p = pathlib.Path(path)
+    if not p.is_absolute() or p.suffix.lower() not in MD_EXT:
+        return 403, {"error": "not a Markdown file"}
+    real = p.resolve()
+    if not real.is_file() or real.suffix.lower() not in MD_EXT:
+        return 404, {"error": "file not found"}
+    cur = mtime(real)
+    if req.get("base") is not None and req.get("base") != cur:
+        return 409, {"error": "changed on disk", "mtime": cur}
+    old = real.read_bytes()
+    if b"\r\n" in old:                                   # keep Windows line endings
+        text = text.replace("\r\n", "\n").replace("\n", "\r\n")
+    data = text.encode("utf-8")
+    if data == old:
+        return 200, {"ok": True, "mtime": cur}
+    BACKUPS.mkdir(parents=True, exist_ok=True)
+    bak = BACKUPS / f"{view_path(real).stem}-{time.strftime('%Y%m%d-%H%M%S')}{real.suffix}"
+    bak.write_bytes(old)
+    tmp = real.with_name(f".{real.name}.mdreader-tmp")
+    try:                                                 # atomic replace, same permissions
+        with open(tmp, "wb") as f:
+            f.write(data); f.flush(); os.fsync(f.fileno())
+        shutil.copymode(real, tmp)
+        os.replace(tmp, real)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        with open(real, "wb") as f:                      # folder not writable: write in place
+            f.write(data)
+    return 200, {"ok": True, "mtime": mtime(real)}
+
+
+class SaveHandler(BaseHTTPRequestHandler):
+    server_version = "mdreader"
+    sys_version = ""
+
+    def log_message(self, *a):
+        pass
+
+    def allowed(self):
+        # pages are file:// (Origin "null") and must name this exact host; anything else is refused
+        return (self.path == "/save" and self.headers.get("Origin") == "null"
+                and self.headers.get("Host") == f"127.0.0.1:{self.server.server_port}")
+
+    def reply(self, code, obj, cors=True):
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        if cors:
+            self.send_header("Access-Control-Allow-Origin", "null")
+            self.send_header("Vary", "Origin")
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        if not self.allowed():
+            return self.reply(403, {"error": "forbidden"}, cors=False)
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "null")
+        self.send_header("Access-Control-Allow-Methods", "POST")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.send_header("Access-Control-Max-Age", "600")
+        self.send_header("Vary", "Origin")
+        self.end_headers()
+
+    def do_GET(self):
+        self.reply(403, {"error": "forbidden"}, cors=False)
+
+    def do_POST(self):
+        if not self.allowed() or not self.headers.get("Content-Type", "").startswith("application/json"):
+            return self.reply(403, {"error": "forbidden"}, cors=False)
+        try:
+            n = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            n = -1
+        if n <= 0 or n > MAX_SAVE:
+            return self.reply(413, {"error": "too large"})
+        try:
+            req = json.loads(self.rfile.read(n))
+            code, out = save_file(req if isinstance(req, dict) else {}, self.server.key)
+        except Exception as e:
+            code, out = 500, {"error": type(e).__name__}
+        self.reply(code, out)
+
+
+def start_server():
+    srv = HTTPServer(("127.0.0.1", 0), SaveHandler)
+    srv.key = secret()
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+    write_atomic(SERVERJ, json.dumps({"pid": os.getpid(), "port": port}))
+    write_atomic(SERVERJS, f"window.__mdSrv&&__mdSrv({port});")
+    return srv
 
 
 # ---------- live-reload watcher ----------
@@ -117,7 +296,13 @@ def watcher_running():
 
 def start_watcher():
     if watcher_running():
-        return
+        try:                                             # a watcher from an older version has no save helper
+            if load_json(SERVERJ, {}).get("pid") == int(PIDFILE.read_text()):
+                return
+        except Exception:
+            pass
+        stop_watcher(quiet=True)
+        time.sleep(0.5)
     subprocess.Popen([sys.executable, os.path.abspath(__file__), "--watch"],
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      start_new_session=True)
@@ -126,9 +311,11 @@ def start_watcher():
 def watch_loop():
     if watcher_running():
         return
+    signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))   # so the finally block runs on --stop
     PIDFILE.write_text(str(os.getpid()))
     last, data, wmt = {}, {}, None
     try:
+        start_server()
         while True:
             try:
                 m = WATCH.stat().st_mtime_ns
@@ -159,17 +346,19 @@ def watch_loop():
         try:
             if PIDFILE.read_text() == str(os.getpid()):
                 PIDFILE.unlink()
+                SERVERJ.unlink(missing_ok=True)
+                SERVERJS.unlink(missing_ok=True)
         except Exception:
             pass
 
 
-def stop_watcher():
+def stop_watcher(quiet=False):
     try:
         pid = int(PIDFILE.read_text())
         os.kill(pid, 15)
-        print("watcher stopped")
+        quiet or print("watcher stopped")
     except Exception:
-        print("watcher was not running")
+        quiet or print("watcher was not running")
 
 
 def clean():
@@ -183,23 +372,26 @@ def clean():
                 n += 1
     WATCH.unlink(missing_ok=True)
     PIDFILE.unlink(missing_ok=True)
-    print(f"deleted {n} saved pages ({size / 1024 / 1024:.1f} MB) from {VIEWS}")
+    SERVERJ.unlink(missing_ok=True)
+    print(f"deleted {n} saved pages ({size / 1024 / 1024:.1f} MB) from {VIEWS} (backups in {BACKUPS} kept)")
 
 
 def reveal(url):
-    """mdreader://reveal?path=/abs/file.md  -> show the file in the file manager. Opens folders only, never runs files."""
+    """mdreader://reveal?path=/abs/file.md -> show the file in the file manager.
+    Any web page can call this link, so: only files the reader opened, folders only, never runs anything."""
     q = parse_qs(urlparse(url).query)
-    p = pathlib.Path(q.get("path", [""])[0]).expanduser()
-    if not p.is_absolute() or not p.exists():
+    raw = q.get("path", [""])[0]
+    known = set(load_json(RECENT, [])) | set(load_json(WATCH, {}))
+    if raw not in known:
+        return
+    p = pathlib.Path(raw)
+    if not p.is_absolute() or not p.is_file():
         return
     p = p.resolve()
-    if p.is_file():
-        if shutil.which("nautilus"):
-            subprocess.Popen(["nautilus", "--select", str(p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        else:
-            subprocess.Popen(["xdg-open", str(p.parent)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    elif p.is_dir():
-        subprocess.Popen(["xdg-open", str(p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    if shutil.which("nautilus"):
+        subprocess.Popen(["nautilus", "--select", str(p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    else:
+        subprocess.Popen(["xdg-open", str(p.parent)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
 
 def ensure_scheme():
@@ -211,6 +403,22 @@ def ensure_scheme():
             subprocess.run(["xdg-mime", "default", "mdreader.desktop", "x-scheme-handler/mdreader"], timeout=5)
     except Exception:
         pass
+
+
+def pick_files():
+    """started without a file (app grid / dash): ask with a file picker, starting in the last folder used"""
+    if not shutil.which("zenity"):
+        return []
+    cmd = ["zenity", "--file-selection", "--multiple", "--separator=\n", "--title=Open Markdown file",
+           "--file-filter=Markdown | *.md *.markdown *.mdown *.mkd", "--file-filter=All files | *"]
+    recent = [r for r in load_json(RECENT, []) if pathlib.Path(r).is_file()]
+    if recent:
+        cmd.append(f"--filename={pathlib.Path(recent[0]).parent}/")
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True)
+    except Exception:
+        return []
+    return [x for x in r.stdout.splitlines() if x] if r.returncode == 0 else []
 
 
 def to_path(a):
@@ -235,17 +443,33 @@ def main():
         clean(); return
     if args and args[0].startswith("mdreader:"):
         reveal(args[0]); return
+    if args and args[0] in ("-h", "--help"):
+        print(__doc__); return
     if not args:
-        print(__doc__); sys.exit(1)
+        args = pick_files()
+        if not args:
+            if sys.stdin.isatty():
+                print(__doc__)
+            return
     if not TEMPLATE.exists():
         print(f"NOT FOUND: {TEMPLATE}"); sys.exit(1)
     VIEWS.mkdir(parents=True, exist_ok=True)
-    template = TEMPLATE.read_text(encoding="utf-8")
+    for d in (BASE, VIEWS):                              # older versions made these readable by others
+        try:
+            os.chmod(d, 0o700)
+        except OSError:
+            pass
+    template, offline = offline_template(TEMPLATE.read_text(encoding="utf-8"))
+    key = secret()
 
     now = time.time()
     for pat in ("*.html", "*.live.js", "*.tmp"):        # old views are removed
         for old in VIEWS.glob(pat):
             if now - old.stat().st_mtime > KEEP_DAYS * 86400:
+                old.unlink(missing_ok=True)
+    if BACKUPS.exists():
+        for old in BACKUPS.iterdir():
+            if now - old.stat().st_mtime > BACKUP_DAYS * 86400:
                 old.unlink(missing_ok=True)
 
     files = []
@@ -263,7 +487,7 @@ def main():
         recent = [str(p)] + [r for r in recent if r != str(p)]
     recent = recent[:MAX_RECENT]
     try:
-        RECENT.write_text(json.dumps(recent, indent=0))
+        write_atomic(RECENT, json.dumps(recent, indent=0))
     except Exception:
         pass
     recent_p = [pathlib.Path(r) for r in recent]
@@ -279,8 +503,8 @@ def main():
             if t in done:
                 continue
             # a recent file outside this folder gets only itself in its folder list
-            mt = write_view(t, folder, root, recent_p, template) if t in folder else \
-                 write_view(t, [t], t.parent, recent_p, template)
+            mt = write_view(t, folder, root, recent_p, template, offline, key) if t in folder else \
+                 write_view(t, [t], t.parent, recent_p, template, offline, key)
             if mt:
                 done.add(t)
                 watch[str(t)] = {"live": str(live_path(t)), "mtime": mt, "t": now}

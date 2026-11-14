@@ -1,61 +1,80 @@
-# Markdown Reader (mdreader) - CONTEXT (15 Nov 2026)
+# Markdown Reader (mdreader) - CONTEXT (15 Nov 2026, v1.4.0)
 
-Read-only Markdown viewer for Ubuntu. Double-click a .md (or `mdview FILE.md`, alias `md`) -> the file opens rendered in the default browser. No editor, on purpose.
+Markdown reader + editor for Ubuntu. Double-click a .md (or `mdview FILE.md`, alias `md`, or the app grid icon -> file picker) -> the file opens rendered in the default browser. Works offline, no network requests.
+This file is in a PUBLIC repo: no platform paths, server names, keys or private notes here.
 
 ## Where things are
-- Repo: ~/code/mdreader -> github.com/cosmicraga/mdreader (public, MIT, branch `master`).
-- Releases: GitHub Releases, asset always named `mdreader_all.deb` so
-  `https://github.com/cosmicraga/mdreader/releases/latest/download/mdreader_all.deb` is the stable install link.
-- Installed on the laptop as the deb (v1.3.0): /usr/bin/mdview, /usr/share/mdreader/reader.html, /usr/share/applications/mdreader.desktop. Default .md app via `mdview --default` (xdg-mime, per user).
-- Alias in ~/.bashrc: `alias md='mdview'`.
+- Repo: ~/code/mdreader -> github.com/cosmicraga/mdreader (public, MIT, branch `master`). Commits as the GitHub noreply email (global git setting).
+- On the laptop: installed as the deb; default .md app via `mdview --default` (xdg-mime, per user); alias in ~/.bashrc: `alias md='mdview'`.
+- Releases: GitHub Releases, asset always named `mdreader_all.deb`; stable install link:
+  `https://github.com/cosmicraga/mdreader/releases/latest/download/mdreader_all.deb`
+- Installed by the deb: /usr/bin/mdview, /usr/share/mdreader/reader.html, /usr/share/mdreader/lib/ (vendored libraries + fonts), /usr/share/applications/mdreader.desktop, /usr/share/icons/hicolor/scalable/apps/mdreader.svg.
+- Per user (dir 700, files 600): ~/mdreader/views/ (generated pages, server.js), recent.json, watch.json, watch.pid, server.json, secret, backups/.
 
 ## Files
 | File | Role |
 |---|---|
-| src/reader.html | The whole reader: one HTML page, inline CSS/JS. Libraries from cdnjs: marked 12.0.2, DOMPurify 3.1.6, highlight.js 11.9.0, MathJax 3.2.2 (tex-svg-full), Mermaid 10.9.1. Fonts: Source Serif 4, Inter, JetBrains Mono (Google Fonts). |
-| src/mdview | Python launcher. Reads the .md, injects `<base href="file://DIR/">` + `window.__MD={text,name}` into a copy of reader.html, writes ~/mdreader/views/NAME-NNNNN.html, xdg-open. Views older than 2 days are deleted. `--default` sets the xdg-mime default. |
-| src/mdreader.desktop | Desktop entry, MimeType text/markdown, text/x-markdown. |
+| src/reader.html | The whole reader + editor: one HTML page, inline CSS/JS. Library URLs point to cdnjs: marked 12.0.2, DOMPurify 3.4.14, highlight.js 11.9.0, MathJax 3.2.2 (es5/tex-svg-full), Mermaid 11.16.1; fonts from Google Fonts (Source Serif 4, Inter, JetBrains Mono). mdview swaps them for the local copies. Also published as a drag-drop page on claude.ai (same file, CDN version). |
+| vendor.sh | Run with internet: reads the versions from the cdnjs URLs in reader.html, `npm pack`s each package (npm checks sha512), copies the file + licence into vendor/, fetches the Google Fonts woff2 into vendor/fonts + fonts.css, writes vendor/SHA256SUMS and LICENSES.md, adds SRI to reader.html where cdnjs serves the identical file. |
+| vendor/ | Committed third-party files (about 7 MB). build.sh refuses to build if SHA256SUMS does not match. |
+| src/mdreader.svg | App icon. |
+| src/mdview | Python launcher (see "mdview" below). |
+| src/mdreader.desktop | Desktop entry: Exec=/usr/bin/mdview %U; MimeType text/markdown, text/x-markdown, x-scheme-handler/mdreader. |
 | debian/control, postinst, postrm | Package metadata. **Version lives in debian/control.** |
-| build.sh | Builds mdreader_all.deb from src/ + debian/ (dpkg-deb). build/ and *.deb are git-ignored. |
+| build.sh | Checks vendor/SHA256SUMS, builds mdreader_all.deb from src/ + debian/ + vendor/ (dpkg-deb). build/ and *.deb are git-ignored. |
 
-## How reader.html works (key decisions)
-- Math is pulled out BEFORE marked parses (placeholders M<n>; code spans/fences skipped), then restored as `\(..\)` / `\[..\]` and typeset by MathJax SVG. Reason: `_ * \` inside formulas break Markdown. Supported: `$..$`, `$$..$$`, `\(..\)`, `\[..\]`, bare `\begin{align|equation|gather|multline|eqnarray}`.
-- MathJax SVG (not KaTeX) because the claude.ai artifact CSP blocks external stylesheets/fonts; SVG needs neither.
-- highlight.js theme is inline CSS (same CSP reason).
-- GitHub callouts `> [!NOTE|TIP|IMPORTANT|WARNING|CAUTION]`, `==mark==`, task lists, tables wrapped for side-scroll, YAML front-matter stripped, BOM stripped.
-- In-page `#` links are handled by a click handler (scrollIntoView) because the injected `<base>` would otherwise send them to the folder.
-- Preferences in localStorage (try/catch): theme light/sepia/dark, serif/sans, font size 13-28, wide layout.
-- Views go to ~/mdreader (visible folder) because snap Firefox cannot read /tmp or hidden dirs.
+## mdview
+- Offline: if all 5 libraries exist in /usr/share/mdreader/lib (or ~/mdreader/lib), each cdnjs <script> becomes file:///usr/share/mdreader/lib/<name> (integrity attrs dropped: SRI fails on file://), the Google Fonts link becomes lib/fonts.css, preconnect removed, and a CSP <meta> is added: default-src 'none'; script-src file: + sha256 of every inline script on the page; style-src file: 'unsafe-inline'; font-src file: data:; img-src file: data: blob: https:; connect-src http://127.0.0.1:*; base-uri file:; form-action/frame-src/object-src 'none'. Order in <head>: charset, CSP, base, __MD script.
+- Save helper: inside the watcher process, HTTPServer on 127.0.0.1:<random port>, port in server.json + views/server.js (page loads it by script tag). POST /save {path, tok, base, text}: Origin must be "null", Host exactly 127.0.0.1:port, JSON content type (forces a CORS preflight), body <= 8 MB; tok = HMAC-SHA256(~/mdreader/secret, path) so a page can only save its own file; path must be in watch.json (opened in the last 24 h) with a Markdown extension; base mtime must match (else 409); backup to ~/mdreader/backups/<view-stem>-<time>.md (deleted after 30 days); CRLF kept; atomic replace with the same mode. A watcher without a matching server.json (older version) is restarted.
+- No arguments (app grid): zenity file picker (multiple, starts in the folder of the last recent file); cancelled = nothing.
+- `mdview FILE.md ...`: builds a page per file in ~/mdreader/views/<stem>-<sha1(path)[:8]>.html = reader.html + `<base href="file://DIR/">` + `window.__MD={text,name,path,dir,root,mtime,live,folder[],recent[]}`; opens it with xdg-open.
+- Folder view: prepares a page for every .md in the file's folder + 2 subfolder levels (skips hidden, node_modules, build, dist, venv, __pycache__, _archive; max 300; files before subfolders) and for the 15 recent files (recent.json). Sidebar links open those pages in the same tab.
+- Live reload: starts one watcher per user (`mdview --watch`, detached; pid in watch.pid). It follows every prepared file in watch.json for 24 h; on save it rewrites views/<name>.live.js = `__mdLive(mtime_ns, text)`. The page loads that script every second (script tags work file:// -> file://, fetch does not) and re-renders in place keeping the scroll position.
+- `--default`: xdg-mime default for .md and mdreader://. `--stop`: stop watcher. `--clean`: stop watcher, delete views/*, watch.json, watch.pid (keeps recent + positions).
+- `mdreader://reveal?path=<file>` (the 📂 button): reveal() runs `nautilus --select <file>` (else xdg-open on the folder). Only paths in recent.json/watch.json (any web page can call the link). Opens folders only, never runs files. Scheme registered on every run (ensure_scheme). Chrome asks once ("Always allow").
+- Clean-up: at every mdview start, pages not refreshed for 2 days are deleted.
+- file:// arguments are URL-decoded (names with spaces work).
+
+## reader.html - key decisions
+- Math pulled out BEFORE marked (placeholders M<n>; code skipped), restored as `\(..\)`/`\[..\]`, typeset by MathJax SVG. Supports `$..$`, `$$..$$`, `\(..\)`, `\[..\]`, bare `\begin{align|equation|gather|multline|eqnarray}`.
+- MathJax SVG (not KaTeX) and inline highlight.js theme: the claude.ai page CSP blocks external stylesheets/fonts.
+- DOMPurify on all rendered HTML; Mermaid securityLevel strict. Mermaid sources are kept in a JS array (data-i index), NOT in an attribute: DOMPurify's SAFE_FOR_XML removes attributes containing `-->`.
+- Editor (only when __MD.tok exists): ✎ Edit / E; body.editing = sticky textarea left 50%, preview right (narrow: Text/Preview toggle); preview re-renders 300 ms after typing; Tab inserts 2 spaces; Ctrl+S saves; Done asks before discarding; beforeunload warns. Live updates while editing: same text -> mark saved; not dirty -> load into editor; dirty -> warn, Save then gets 409 and asks to overwrite.
+- Callouts `> [!NOTE|TIP|IMPORTANT|WARNING|CAUTION]`, `==mark==`, task lists, tables in a side-scroll wrapper, YAML front-matter and BOM stripped.
+- In-page `#` links handled by a click handler (the injected <base> would send them to the folder).
+- Sidebar tabs Contents | Folder | Recent (tabs shown whenever __MD exists). `[hidden]{display:none!important}` is required (author display rules override the hidden attribute - that was the 1.1.1 bug).
+- Reading position per file in localStorage `mdr-pos:<path>`, restored after MathJax/Mermaid, "Start from top" toast.
+- Search: Ctrl+F or /, wraps hits in <mark class=hit>, skips maths/SVG/labels, Enter/Shift+Enter, Esc clears; re-runs after live update.
+- Scroll jitter fix (1.0.1): html/body overflow-x:clip, scrollbar-gutter:stable, overflow-anchor:none, rAF-throttled scroll handler, progress bar via transform.
+- Preferences in localStorage: theme light/sepia/dark, serif/sans, size 13-28, wide layout, last sidebar tab.
+- Pages live in ~/mdreader (visible folder) because snap Firefox cannot read /tmp or hidden folders.
 
 ## History
-- 1.0.0 (15 Nov): first release.
-- 1.1.1 (15 Nov): Folder view (sidebar tabs Contents | Folder | Recent; Folder = .md files in the opened file's folder + 2 subfolder levels, skipping hidden dirs, node_modules, build, dist, venv, _archive; max 300; files before subfolders), Recent = last 15 files (~/mdreader/recent.json); mdview prepares a view for each (name = stem-sha1(path)[:8].html), links open in the same tab, content as of the mdview run. Reading position per file (localStorage mdr-pos:<path>), restored after MathJax/Mermaid, 'Start from top' toast. Fix: [hidden]{display:none!important} (author display:flex was overriding the hidden attribute).
-- 1.2.1 (15 Nov): `mdview --clean` = stop the watcher, delete everything in ~/mdreader/views, watch.json and watch.pid; keeps recent.json and reading positions. (Automatic clean-up still runs at each mdview start: pages not refreshed for 2 days.)
-- 1.3.0 (15 Nov): 📂 Show in folder. The bar button is a link mdreader://reveal?path=<file>; the desktop file also handles x-scheme-handler/mdreader (Exec=/usr/bin/mdview %U); mdview reveal() opens `nautilus --select <file>` (else xdg-open on the folder), opens folders only, never runs files. Scheme registered by `mdview --default` and on every run (ensure_scheme). Chrome asks once (tick Always allow). Also: file:// arguments are URL-decoded (names with spaces work on double-click).
-- 1.2.0 (15 Nov): live reload + search. Live: mdview starts one background watcher per user (`mdview --watch`, pid in ~/mdreader/watch.pid, `mdview --stop`) that follows every prepared file listed in ~/mdreader/watch.json for 24 h; on save it rewrites views/<name>.live.js with __mdLive(mtime_ns, text); the page loads that script every second (script tags work file:// to file://, fetch does not) and re-renders in place keeping the scroll position. Search: Ctrl+F or /, wraps hits in <mark class=hit>, skips maths/SVG/code labels, Enter/Shift+Enter, Esc clears; re-runs after a live update.
-- 1.0.1 (15 Nov): fixed text shaking at page bottom (horizontal overflow toggling a scrollbar). Fix: html/body overflow-x:clip, scrollbar-gutter:stable, overflow-anchor:none, scroll handler throttled with rAF, progress bar uses transform.
+- 1.0.0 first release. 1.0.1 scroll jitter fix. 1.1.1 folder view, recent files, reading position. 1.2.0 live reload, search. 1.2.1 `--clean`. 1.3.0 📂 show in folder, file-URI decoding. 1.4.0 offline (vendored libs, CSP), editor + save helper, DOMPurify 3.4.14 and Mermaid 11.16.1 (XSS fixes), private file modes, 📂 limited to known files, app grid opens a file picker, own icon; fix: Mermaid diagrams with `-->` now render.
+- Security clean-up (15 Nov): history rewritten to the noreply email; GitHub "keep email private" + "block pushes that expose email" ON.
 
 ## Release routine
-1. Edit src/ ; bump `Version:` in debian/control.
-2. `./build.sh && sudo apt install ./mdreader_all.deb` ; test with `mdview any-file.md`.
-3. `git add -A && git commit -m "X.Y.Z: ..." && git push`
-4. `gh release create vX.Y.Z mdreader_all.deb --title "Markdown Reader X.Y.Z" --notes "..."`
-Rule: never put platform paths, keys or private notes in this repo (public).
+1. Edit src/; bump `Version:` in debian/control. Library version changed in reader.html? run ./vendor.sh again.
+2. `./build.sh && sudo apt install ./mdreader_all.deb`; test with `mdview any-file.md`.
+3. Run the public-repo check (secrets, emails, private paths) before every release.
+4. `git add -A && git commit -m "X.Y.Z: ..." && git push`
+5. `gh release create vX.Y.Z mdreader_all.deb --title "Markdown Reader X.Y.Z" --notes "..."`
 
 ## Known limits
-- Needs internet (cdnjs libraries). Images from the web load in the deb version; not in the claude.ai hosted copy (CSP).
-- Live reload follows a file for 24 h after mdview last prepared it; after that, run mdview again.
-- Folder/Recent pages are snapshots from the mdview run until opened (then live reload brings them up to date).
+- Remote https images in a note still load in the deb version (allowed in the CSP on purpose); not in the claude.ai hosted copy (its CSP).
 - Not in the Snap Store / Ubuntu archive (GitHub release only).
+- Saving needs the watcher (stops 24 h after the last mdview run): Save then says so; run mdview on the file again.
+- Live reload follows a file for 24 h after mdview last prepared it.
+- Folder/Recent pages are snapshots from the mdview run until opened (then live reload updates them).
 
-## Ideas / roadmap (15 Nov 2026) - priority: 1, 5, 8 first
-1. DONE 1.2.0 - Live reload: page refreshes when the .md is saved (write in any editor, read beside it).
-2. Offline mode: bundle MathJax, highlight.js, Mermaid in the deb (~5 MB), no internet needed.
-3. DONE 1.2.0 - Search in document: search box, highlight matches, jump between them.
-4. Links between notes: a link to another .md opens it in the reader.
+## Roadmap (priority after 4: 5, 8)
+1. DONE 1.2.0 - Live reload.
+2. DONE 1.4.0 - Offline mode + editor.
+3. DONE 1.2.0 - Search in document.
+4. NEXT - Links between notes: a link to another .md opens it in the reader.
 5. Book tags: show @recall, @step, @check, @solved etc. as styled boxes (paste files read like the book).
 6. Print / PDF: clean handout layout, page breaks before chapters.
-7. DONE 1.1.1 - Folder view: sidebar listing all .md files in the folder.
+7. DONE 1.1.1 - Folder view.
 8. Presentation mode: each --- or # heading becomes a full-screen slide (teach from notes).
 9. Focus mode: hide bar and contents, dim all but the current paragraph.
-10. DONE 1.1.1 - Recent files + reading position: reopen a file where you left off.
+10. DONE 1.1.1 - Recent files + reading position.

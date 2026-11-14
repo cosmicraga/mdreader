@@ -6,9 +6,9 @@
 <title>Markdown Reader</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;0,8..60,700;1,8..60,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js" integrity="sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.4.14/purify.min.js" integrity="sha384-46dPGH1XlTmj7bc50bqLjTdORXs/3EP2QpA/6EWbelYWOY9VGp+87RT61S3Mcslb" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp" crossorigin="anonymous"></script>
 <script>
 window.MathJax = {
   tex: { inlineMath: [['\\(', '\\)']], displayMath: [['\\[', '\\]']], packages: {'[+]': ['ams']}, tags: 'ams' },
@@ -18,7 +18,7 @@ window.MathJax = {
 };
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-svg-full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.16.1/mermaid.min.js" integrity="sha384-aBQXj4hK6Jm05i7aQAsUV3bLdSUrHX1BGYfMB0166TtWt/RRaw+h0Eelme9OCOvy" crossorigin="anonymous"></script>
 <style>
 :root{
   --bg:#fbfaf7; --panel:#f3f1ec; --text:#1f2328; --muted:#6b6f76; --line:#e2dfd8;
@@ -160,7 +160,21 @@ body.dragging::after{content:"Drop .md file";position:fixed;inset:0;display:grid
 [data-theme=dark] .hljs-title,[data-theme=dark] .hljs-section{color:#c3a6ff}
 [data-theme=dark] .hljs-attr,[data-theme=dark] .hljs-built_in,[data-theme=dark] .hljs-variable{color:#79c0ff}
 
-@media (max-width:900px){#toc{display:none}main{padding:24px 16px 100px}}
+/* editor */
+#editPane{display:none}
+body.editing #editPane{display:block;position:sticky;top:46px;align-self:flex-start;width:50%;flex:none;height:calc(100vh - 46px);border-right:1px solid var(--line)}
+#ed{display:block;width:100%;height:100%;border:0;resize:none;margin:0;padding:22px 20px 40vh;font:14px/1.65 var(--mono);background:var(--panel);color:var(--text);outline:none;tab-size:4}
+body.editing #toc{display:none}
+body.editing main{padding:28px 22px 120px}
+body.editing .ro{display:none}
+.eo{display:none}
+body.editing .eo{display:inline-block}
+#edState{font:12px var(--sans);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:38vw}
+#edState[data-k=dirty]{color:#bf8700}#edState[data-k=ok]{color:#2da44e}#edState[data-k=err]{color:#cf222e;font-weight:600}
+body.editing #pvBtn{display:none}
+@media (max-width:900px){#toc{display:none}main{padding:24px 16px 100px}
+  body.editing #editPane{width:100%}body.editing main{display:none}body.editing #pvBtn{display:inline-block}
+  body.editing.pv #editPane{display:none}body.editing.pv main{display:block}}
 @media print{.bar,#toc{display:none}main{padding:0}#doc{max-width:none}}
 </style>
 </head>
@@ -171,12 +185,17 @@ body.dragging::after{content:"Drop .md file";position:fixed;inset:0;display:grid
   <span id="live" hidden title="Live: updates when the file is saved">● Live</span>
   <span class="sp"></span>
   <a class="btn icon" id="revealBtn" hidden title="Show in folder">📂</a>
-  <button class="btn icon" id="findBtn" title="Search (Ctrl+F or /)">🔍</button>
-  <button class="btn" id="openBtn">Open .md</button>
-  <select class="btn" id="font" title="Typeface"><option value="serif">Serif</option><option value="sans">Sans</option></select>
-  <button class="btn icon" id="smaller" title="Smaller text">A−</button>
-  <button class="btn icon" id="bigger" title="Larger text">A+</button>
-  <button class="btn icon" id="width" title="Toggle wide layout">↔</button>
+  <span id="edState" class="eo"></span>
+  <button class="btn eo" id="pvBtn" title="Switch between text and preview">Preview</button>
+  <button class="btn eo" id="saveBtn" title="Save (Ctrl+S)">Save</button>
+  <button class="btn eo" id="doneBtn" title="Back to reading">Done</button>
+  <button class="btn ro" id="editBtn" hidden title="Edit this file (E)">✎ Edit</button>
+  <button class="btn icon ro" id="findBtn" title="Search (Ctrl+F or /)">🔍</button>
+  <button class="btn ro" id="openBtn">Open .md</button>
+  <select class="btn ro" id="font" title="Typeface"><option value="serif">Serif</option><option value="sans">Sans</option></select>
+  <button class="btn icon ro" id="smaller" title="Smaller text">A−</button>
+  <button class="btn icon ro" id="bigger" title="Larger text">A+</button>
+  <button class="btn icon ro" id="width" title="Toggle wide layout">↔</button>
   <select class="btn" id="theme" title="Theme"><option value="light">Light</option><option value="sepia">Sepia</option><option value="dark">Dark</option></select>
   <input type="file" id="file" accept=".md,.markdown,.mdown,.mkd,.txt,text/markdown,text/plain" hidden>
   <div id="progress"></div>
@@ -196,6 +215,7 @@ body.dragging::after{content:"Drop .md file";position:fixed;inset:0;display:grid
     <div id="pane-folder" class="pane" hidden></div>
     <div id="pane-recent" class="pane" hidden></div>
   </nav>
+  <div id="editPane"><textarea id="ed" spellcheck="true" autocomplete="off" aria-label="Markdown text"></textarea></div>
   <main>
     <div id="drop">
       <h1>Markdown Reader</h1>
@@ -274,6 +294,7 @@ function restoreMath(html, store){
 
 /* ---------- marked setup ---------- */
 const slugCount = {};
+const mermaidSrc = [];   // diagram sources stay in JS: the sanitizer removes attributes that contain "-->"
 const slug = t => { let s = t.toLowerCase().replace(/<[^>]+>/g,'').replace(/[^\wÀ-￿\- ]+/g,'').trim().replace(/\s+/g,'-') || 'section';
   if (slugCount[s] != null) s += '-' + (++slugCount[s]); else slugCount[s] = 0; return s; };
 marked.use({
@@ -281,7 +302,7 @@ marked.use({
   renderer: {
     code(code, lang){
       const l = (lang || '').trim().split(/\s+/)[0].toLowerCase();
-      if (l === 'mermaid') return `<div class="mermaid" data-src="${esc(code)}">${esc(code)}</div>`;
+      if (l === 'mermaid') { mermaidSrc.push(code); return `<div class="mermaid" data-i="${mermaidSrc.length - 1}">${esc(code)}</div>`; }
       let out;
       try { out = l && hljs.getLanguage(l) ? hljs.highlight(code, {language: l}).value : hljs.highlightAuto(code).value; }
       catch { out = esc(code); }
@@ -311,12 +332,13 @@ async function render(src, name, opts = {}){
 async function renderNow(src, name, opts){
   const live = !!opts.live, keepY = document.documentElement.scrollTop;
   for (const k in slugCount) delete slugCount[k];
+  mermaidSrc.length = 0;
   src = src.replace(/^﻿/, '').replace(/^---\n[\s\S]*?\n---\n/, ''); // strip BOM + YAML front-matter
   const { text, store: mstore } = protectMath(src);
   let html = marked.parse(text);
   html = restoreMath(html, mstore);
   html = html.replace(/==([^=\n]+)==/g, '<mark>$1</mark>');
-  html = DOMPurify.sanitize(html, { ADD_ATTR: ['data-src','style'], ADD_TAGS: ['details','summary'] });
+  html = DOMPurify.sanitize(html, { ADD_ATTR: ['data-i','style'], ADD_TAGS: ['details','summary'] });
 
   const doc = $('#doc');
   doc.innerHTML = html;
@@ -376,7 +398,7 @@ $('#tabs').addEventListener('click', e => { const b = e.target.closest('button')
 /* reading position: remembered per file */
 let posKey = null, restoring = false;
 function savePos(){
-  if (!posKey || restoring) return;
+  if (!posKey || restoring || editing) return;
   const h = document.documentElement, max = h.scrollHeight - h.clientHeight;
   store.set(posKey, JSON.stringify({ f: max > 0 ? h.scrollTop / max : 0, t: Date.now() }));
 }
@@ -398,7 +420,8 @@ async function rerunMermaid(){
   if (!nodes.length || !window.mermaid) return;
   mermaid.initialize({ startOnLoad:false, securityLevel:'strict', theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'neutral' });
   for (const n of nodes) {
-    const src = n.dataset.src.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');
+    if (!n.dataset.src) n.dataset.src = mermaidSrc[+n.dataset.i] ?? n.textContent;   // kept for theme changes
+    const src = n.dataset.src;
     try { const { svg } = await mermaid.render('mmd' + (mermaidN++), src); n.innerHTML = svg; }
     catch { n.innerHTML = `<pre><code>${esc(src)}</code></pre>`; }
   }
@@ -541,6 +564,9 @@ $('#findNext').onclick = () => gotoHit(hitI + 1);
 $('#findX').onclick = closeFind;
 addEventListener('keydown', e => {
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && M && M.tok) { e.preventDefault(); if (editing) save(); return; }
+  if (editing) return;                                   // in the editor the browser's own Ctrl+F works
+  if (e.key.toLowerCase() === 'e' && !typing && !e.ctrlKey && !e.metaKey && !e.altKey && M && M.tok) { e.preventDefault(); startEdit(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') { if (!$('#doc').hidden) { e.preventDefault(); openFind(); } }
   else if (e.key === '/' && !typing) { e.preventDefault(); openFind(); }
   else if (e.key === 'Escape' && !$('#find').hidden) closeFind();
@@ -555,11 +581,12 @@ if (window.__MD && window.__MD.path) {
 }
 
 /* ---------- live reload: the mdview watcher rewrites a small .live.js when the file is saved ---------- */
+let curMtime = window.__MD ? window.__MD.mtime : null;
 if (window.__MD && window.__MD.live) {
-  let curMtime = window.__MD.mtime;
   window.__mdLive = (mt, text) => {
     if (!mt || mt === curMtime || text == null) return;
     curMtime = mt; window.__MD.text = text;
+    if (editing) { liveWhileEditing(mt, text); return; }
     render(text, window.__MD.name, { live: true });
     const l = $('#live'); l.classList.add('flash'); l.textContent = '● Updated'; setTimeout(() => { l.classList.remove('flash'); l.textContent = '● Live'; }, 1500);
   };
@@ -572,6 +599,82 @@ if (window.__MD && window.__MD.live) {
     document.head.appendChild(s);
   }, 1000);
 }
+
+/* ---------- edit: text on the left, preview on the right; Save goes to the mdview helper on 127.0.0.1 ---------- */
+let editing = false, dirty = false, saving = false, editBase = null, pvTm = null;
+const ed = $('#ed');
+function setState(t, k){ const s = $('#edState'); s.textContent = t; s.title = t; s.dataset.k = k || ''; }
+function startEdit(){
+  if (!M || !M.tok || editing) return;
+  closeFind(); savePos();
+  editing = true; dirty = false; editBase = curMtime;
+  ed.value = M.text;
+  document.body.classList.add('editing'); document.body.classList.remove('pv');
+  setState('No changes');
+  render(ed.value, M.name, { live: true });
+  ed.focus(); ed.setSelectionRange(0, 0); ed.scrollTop = 0;
+}
+function stopEdit(){
+  if (dirty && !confirm('Discard the unsaved changes?')) return;
+  editing = false; dirty = false;
+  document.body.classList.remove('editing', 'pv');
+  render(M.text, M.name);
+}
+function liveWhileEditing(mt, text){
+  if (text === ed.value) { editBase = mt; if (dirty) { dirty = false; setState('Saved', 'ok'); } return; }
+  if (!dirty) { ed.value = text; editBase = mt; render(text, M.name, { live: true }); setState('Reloaded: the file changed on disk', 'ok'); return; }
+  setState('The file changed on disk. Save will ask before overwriting.', 'err');
+}
+ed.addEventListener('input', () => {
+  if (!dirty) { dirty = true; setState('Unsaved changes', 'dirty'); }
+  clearTimeout(pvTm); pvTm = setTimeout(() => render(ed.value, M.name, { live: true }), 300);
+});
+ed.addEventListener('keydown', e => {
+  if (e.key !== 'Tab' || e.ctrlKey || e.altKey || e.metaKey) return;
+  e.preventDefault();
+  if (!document.execCommand('insertText', false, '  ')) { ed.setRangeText('  ', ed.selectionStart, ed.selectionEnd, 'end'); ed.dispatchEvent(new Event('input')); }
+});
+function findServer(){
+  return new Promise((res, rej) => {
+    window.__mdSrv = p => res(p);
+    const s = document.createElement('script');
+    s.src = M.srv + '?' + Date.now();
+    s.onload = () => { s.remove(); setTimeout(() => rej(new Error('nohelper')), 30); };
+    s.onerror = () => { s.remove(); rej(new Error('nohelper')); };
+    document.head.appendChild(s);
+  });
+}
+async function save(force){
+  if (!editing || saving) return;
+  const text = ed.value;
+  saving = true; setState('Saving…');
+  try {
+    const port = await findServer();
+    let r;
+    try {
+      r = await fetch(`http://127.0.0.1:${port}/save`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: M.path, tok: M.tok, base: force ? null : editBase, text }) });
+    } catch { throw new Error('nohelper'); }
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 409) {
+      saving = false;
+      if (confirm('This file was changed outside the reader after you started editing.\n\nOK: overwrite it with your text (the old version is kept in ~/mdreader/backups)\nCancel: keep editing, nothing is saved')) return save(true);
+      setState('Not saved: the file changed on disk', 'err'); return;
+    }
+    if (!r.ok || !j.ok) throw new Error(j.error || 'HTTP ' + r.status);
+    M.text = text; curMtime = editBase = j.mtime;
+    if (ed.value === text) { dirty = false; setState('Saved ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), 'ok'); }
+    else setState('Unsaved changes', 'dirty');
+  } catch (e) {
+    setState(e.message === 'nohelper' ? 'Not saved: the save helper is not running. Open the file with mdview again, then Save.' : 'Not saved: ' + e.message, 'err');
+  } finally { saving = false; }
+}
+$('#editBtn').onclick = startEdit;
+$('#doneBtn').onclick = stopEdit;
+$('#saveBtn').onclick = () => save();
+$('#pvBtn').onclick = () => { const on = document.body.classList.toggle('pv'); $('#pvBtn').textContent = on ? 'Text' : 'Preview'; if (!on) ed.focus(); };
+addEventListener('beforeunload', e => { if (editing && dirty) { e.preventDefault(); e.returnValue = ''; } });
+if (M && M.tok && M.srv) $('#editBtn').hidden = false;
 
 /* opened by the mdview launcher: file content is embedded in window.__MD */
 if (window.__MD) {

@@ -1,10 +1,12 @@
 [Desktop Entry]
 Type=Application
 Name=Markdown Reader
-Comment=Read Markdown files with clean formatting
+GenericName=Markdown viewer and editor
+Comment=Read and edit Markdown files with clean formatting
+Keywords=markdown;md;notes;reader;viewer;editor;
 Exec=/usr/bin/mdview %U
-Icon=accessories-text-editor
+Icon=mdreader
 Terminal=false
+StartupNotify=false
 MimeType=text/markdown;text/x-markdown;x-scheme-handler/mdreader;
-Categories=Office;Viewer;
-NoDisplay=false
+Categories=Office;Viewer;TextEditor;
