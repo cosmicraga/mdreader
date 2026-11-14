@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """mdview FILE.md ...   open Markdown files in the Markdown Reader (browser)
    mdview --default    make Markdown Reader the default app for .md files
-   mdview --stop       stop the live-reload watcher"""
+   mdview --stop       stop the live-reload watcher
+   mdview --clean      stop the watcher and delete all saved pages (keeps recent list and positions)"""
 import sys, os, json, time, html, re, hashlib, subprocess, pathlib
 
 HOME = pathlib.Path.home()
@@ -170,6 +171,20 @@ def stop_watcher():
         print("watcher was not running")
 
 
+def clean():
+    stop_watcher()
+    n, size = 0, 0
+    if VIEWS.exists():
+        for f in VIEWS.iterdir():
+            if f.is_file():
+                size += f.stat().st_size
+                f.unlink(missing_ok=True)
+                n += 1
+    WATCH.unlink(missing_ok=True)
+    PIDFILE.unlink(missing_ok=True)
+    print(f"deleted {n} saved pages ({size / 1024 / 1024:.1f} MB) from {VIEWS}")
+
+
 # ---------- main ----------
 def main():
     args = sys.argv[1:]
@@ -182,6 +197,8 @@ def main():
         watch_loop(); return
     if args and args[0] == "--stop":
         stop_watcher(); return
+    if args and args[0] == "--clean":
+        clean(); return
     if not args:
         print(__doc__); sys.exit(1)
     if not TEMPLATE.exists():

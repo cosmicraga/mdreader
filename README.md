@@ -19,6 +19,7 @@ mdview --default        # make it the default app for .md files
 ```bash
 mdview notes.md         # or double-click any .md file
 mdview --stop           # stop the live-reload watcher (it also stops by itself after 24 h)
+mdview --clean          # delete all saved pages in ~/mdreader/views (keeps recent list and positions)
 ```
 
 Optional alias: `echo "alias md='mdview'" >> ~/.bashrc`

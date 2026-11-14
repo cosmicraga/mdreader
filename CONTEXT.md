@@ -6,7 +6,7 @@ Read-only Markdown viewer for Ubuntu. Double-click a .md (or `mdview FILE.md`, a
 - Repo: ~/code/mdreader -> github.com/cosmicraga/mdreader (public, MIT, branch `master`).
 - Releases: GitHub Releases, asset always named `mdreader_all.deb` so
   `https://github.com/cosmicraga/mdreader/releases/latest/download/mdreader_all.deb` is the stable install link.
-- Installed on the laptop as the deb (v1.2.0): /usr/bin/mdview, /usr/share/mdreader/reader.html, /usr/share/applications/mdreader.desktop. Default .md app via `mdview --default` (xdg-mime, per user).
+- Installed on the laptop as the deb (v1.2.1): /usr/bin/mdview, /usr/share/mdreader/reader.html, /usr/share/applications/mdreader.desktop. Default .md app via `mdview --default` (xdg-mime, per user).
 - Hosted copy (drag-drop only): claude.ai artifact "Markdown Reader" (slug 5c6dd861-b300-4afe-b4a0-2e94563e0291).
 - Alias in ~/.bashrc: `alias md='mdview'`.
 
@@ -31,6 +31,7 @@ Read-only Markdown viewer for Ubuntu. Double-click a .md (or `mdview FILE.md`, a
 ## History
 - 1.0.0 (15 Nov): first release.
 - 1.1.1 (15 Nov): Folder view (sidebar tabs Contents | Folder | Recent; Folder = .md files in the opened file's folder + 2 subfolder levels, skipping hidden dirs, node_modules, build, dist, venv, _archive; max 300; files before subfolders), Recent = last 15 files (~/mdreader/recent.json); mdview prepares a view for each (name = stem-sha1(path)[:8].html), links open in the same tab, content as of the mdview run. Reading position per file (localStorage mdr-pos:<path>), restored after MathJax/Mermaid, 'Start from top' toast. Fix: [hidden]{display:none!important} (author display:flex was overriding the hidden attribute).
+- 1.2.1 (15 Nov): `mdview --clean` = stop the watcher, delete everything in ~/mdreader/views, watch.json and watch.pid; keeps recent.json and reading positions. (Automatic clean-up still runs at each mdview start: pages not refreshed for 2 days.)
 - 1.2.0 (15 Nov): live reload + search. Live: mdview starts one background watcher per user (`mdview --watch`, pid in ~/mdreader/watch.pid, `mdview --stop`) that follows every prepared file listed in ~/mdreader/watch.json for 24 h; on save it rewrites views/<name>.live.js with __mdLive(mtime_ns, text); the page loads that script every second (script tags work file:// to file://, fetch does not) and re-renders in place keeping the scroll position. Search: Ctrl+F or /, wraps hits in <mark class=hit>, skips maths/SVG/code labels, Enter/Shift+Enter, Esc clears; re-runs after a live update.
 - 1.0.1 (15 Nov): fixed text shaking at page bottom (horizontal overflow toggling a scrollbar). Fix: html/body overflow-x:clip, scrollbar-gutter:stable, overflow-anchor:none, scroll handler throttled with rAF, progress bar uses transform.
 
