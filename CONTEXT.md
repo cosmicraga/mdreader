@@ -44,9 +44,14 @@ Rule: never put platform paths, keys or private notes in this repo (public).
 - No live reload: re-run mdview after the file changes.
 - Not in the Snap Store / Ubuntu archive (GitHub release only).
 
-## Ideas (not started)
-- Offline mode: vendor the libraries into /usr/share/mdreader/lib (bigger deb, no internet needed).
-- Live reload when the .md changes (small local watcher or a Reload button that re-reads the file).
-- Print/PDF stylesheet tuning; Ctrl+F friendly anchors; search box.
-- Wiki-style links between .md files in the same folder (open the linked .md through mdview).
-- Book-editor tags (@recall, @step, ...) shown as styled blocks for reading the paste files.
+## Ideas / roadmap (15 Nov 2026) - priority: 1, 5, 8 first
+1. Live reload: page refreshes when the .md is saved (write in any editor, read beside it).
+2. Offline mode: bundle MathJax, highlight.js, Mermaid in the deb (~5 MB), no internet needed.
+3. Search in document: search box, highlight matches, jump between them.
+4. Links between notes: a link to another .md opens it in the reader.
+5. Book tags: show @recall, @step, @check, @solved etc. as styled boxes (paste files read like the book).
+6. Print / PDF: clean handout layout, page breaks before chapters.
+7. Folder view: sidebar listing all .md files in the folder.
+8. Presentation mode: each --- or # heading becomes a full-screen slide (teach from notes).
+9. Focus mode: hide bar and contents, dim all but the current paragraph.
+10. Recent files + reading position: reopen a file where you left off.
