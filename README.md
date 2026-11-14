@@ -6,7 +6,7 @@ A clean Markdown reader with a built-in editor. Double-click a `.md` file and it
 
 **Editing:** ✎ Edit (or press `E`) opens the text beside a live preview · Ctrl+S saves · a copy of the old version is kept in `~/mdreader/backups/` (30 days) · if the file changed on disk meanwhile, Save asks first · Windows line endings are kept.
 
-**Reading:** live reload (the page updates when you save the file) · search in document (Ctrl+F or `/`, Enter / Shift+Enter) · sidebar tabs Contents | Folder | Recent · resumes where you left off · 📂 show the file in the folder · light / sepia / dark · serif or sans · text size · wide layout · reading progress bar.
+**Reading:** links between notes (`[see](other.md#heading)` opens that note in the reader, at the heading) · live reload (the page updates when you save the file) · search in document (Ctrl+F or `/`, Enter / Shift+Enter) · sidebar tabs Contents | Folder | Recent · resumes where you left off · 📂 show the file in the folder · light / sepia / dark · serif or sans · text size · wide layout · reading progress bar.
 
 ## Install
 
@@ -36,11 +36,12 @@ Press the Super key, type **Markdown**, click **Markdown Reader**: a file picker
 - No network: marked, DOMPurify, highlight.js, MathJax, Mermaid and the fonts ship in `/usr/share/mdreader/lib/` (fetched from npm by `vendor.sh`, checked against `vendor/SHA256SUMS` at every build). Images in a note that point to `https://` still load.
 - Each page has a strict Content-Security-Policy: scripts only from local files plus the page's own inline scripts (by hash), so HTML hidden in a note cannot run code or call out. All note HTML also goes through DOMPurify; Mermaid runs in strict mode.
 - Saving: the background helper listens on 127.0.0.1 only, accepts requests only from reader pages (Origin `null`, exact Host), and each page carries a secret token valid for its own file only. It writes only Markdown files the reader opened in the last 24 h, backs up first and refuses if the file changed on disk.
-- Pages, tokens and backups in `~/mdreader/` are private to you (mode 600/700). 📂 only opens a folder, and only for files the reader opened.
+- Pages, tokens and backups in `~/mdreader/` are private to you (mode 600/700). 📂 only opens a folder, and only for files the reader opened. `mdreader://open` only shows Markdown files that an open note links to or that lie in an opened folder; it never runs anything.
 
 ## Notes
 
 - Each opened file is written as a page to `~/mdreader/views/` (removed after 2 days). Folder view covers the file's folder and 2 subfolder levels.
+- Links to other notes: `mdview` prepares a page for every note the opened file, its folder and the recent files link to (relative or absolute paths, `<my note.md>` for names with spaces, `#heading` works). A link added later goes through an `mdreader://open` link: mdview opens it only if an open note links to it or it lies in an opened folder (2 subfolder levels, no hidden folders), and only Markdown files.
 - 📂 Show in folder uses an `mdreader://` link handled by mdview (opens Files with the file selected). Chrome asks once to open xdg-open: tick "Always allow".
 - Saving needs the background helper (started by `mdview`, stops after 24 h without use). If Save says it is not running, open the file with `mdview` again.
 - Live reload: `mdview` starts a small background watcher (one per user) that follows the prepared files for 24 hours.

@@ -3,10 +3,11 @@
    mdview --default    make Markdown Reader the default app for .md files
    mdview --stop       stop the live-reload watcher
    mdview --clean      stop the watcher and delete all saved pages (keeps recent list and positions)
-   mdview              (no file, e.g. from the app grid) choose files in a file picker"""
+   mdview              (no file, e.g. from the app grid) choose files in a file picker
+   Links in a note to other .md files open them in the reader too."""
 import sys, os, json, time, html, re, hashlib, hmac, secrets, base64, signal, threading, subprocess, pathlib, shutil
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs, unquote, quote
 
 os.umask(0o077)                          # every file mdview writes is private (pages hold the note text)
 
@@ -38,6 +39,7 @@ KEEP_DAYS = 2                            # views not refreshed for this long are
 WATCH_HOURS = 24                         # a file is watched this long after it was last prepared
 BACKUP_DAYS = 30
 MAX_SAVE = 8 * 1024 * 1024               # largest body the save helper accepts
+MAX_LINKED = 100                         # extra pages for files the prepared notes link to
 
 
 # ---------- helpers ----------
@@ -119,6 +121,64 @@ def load_json(path, default):
         return default
 
 
+# ---------- links between notes ----------
+_CODE = re.compile(r"^ {0,3}(```|~~~)[^\n]*\n.*?^ {0,3}\1[^\n]*$|`[^`\n]+`", re.S | re.M)
+_LINK_RES = (
+    re.compile(r"\]\(\s*(<[^>\n]*>|[^\s)]+)"),                       # [text](target)
+    re.compile(r"^ {0,3}\[[^\]\n]+\]:\s*(<[^>\n]*>|\S+)", re.M),     # [id]: target
+    re.compile(r"<a\s[^>]*?href\s*=\s*[\"']([^\"']+)[\"']", re.I),  # <a href="target">
+)
+
+
+def link_target(raw, base_dir):
+    """a link as written in a note -> (key, real path) if it points to a local Markdown file, else None.
+    key = the path the browser computes from the page's <base> (no symlinks resolved): the page looks links up by it."""
+    raw = html.unescape(raw.strip())
+    if raw.startswith("<") and raw.endswith(">"):
+        raw = raw[1:-1]
+    raw = raw.split("#", 1)[0].split("?", 1)[0]
+    if not raw:
+        return None
+    if re.match(r"[a-zA-Z][\w+.-]*:", raw):                           # a scheme: only file:// counts
+        u = urlparse(raw)
+        if u.scheme.lower() != "file" or u.netloc not in ("", "localhost"):
+            return None
+        path = unquote(u.path)
+    else:
+        path = unquote(raw)
+        if not path.startswith("/"):
+            path = str(base_dir / path)
+    key = os.path.normpath(path)
+    if pathlib.PurePath(key).suffix.lower() not in MD_EXT:
+        return None
+    try:
+        real = pathlib.Path(key).resolve()
+        if real.is_file() and real.suffix.lower() in MD_EXT and real.stat().st_size <= MAX_BYTES:
+            return key, real
+    except OSError:
+        pass
+    return None
+
+
+def note_links(text, base_dir):
+    """[(key, real)] for every link in the note to another local Markdown file (code blocks skipped)"""
+    text = _CODE.sub("", text)
+    out, seen = [], set()
+    for rx in _LINK_RES:
+        for m in rx.finditer(text):
+            t = link_target(m.group(1), base_dir)
+            if t and t[0] not in seen:
+                seen.add(t[0]); out.append(t)
+    return out
+
+
+def read_text(p):
+    try:
+        return p.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return None
+
+
 # ---------- page building ----------
 def offline_template(t):
     """use the libraries shipped in LIB instead of cdnjs / Google Fonts. Returns (template, offline?)."""
@@ -150,14 +210,20 @@ def head_insert(page, text):
     return page.replace(m, m + "\n" + text, 1) if m in page else page.replace("<head>", "<head>\n" + text, 1)
 
 
-def write_view(p, folder, root, recent, template, offline=False, key=b""):
+def write_view(p, folder, root, recent, template, offline=False, key=b"", pages=None):
     try:
         text = p.read_text(encoding="utf-8", errors="replace")
         mt = mtime(p)
     except Exception:
         return None
+    links = {}                                           # link path (as the browser resolves it) -> page
+    for k, real in note_links(text, p.parent):
+        v = (pages or {}).get(str(real))
+        if v:
+            links[k] = v
     data = {
         "text": text, "name": p.name, "path": str(p), "dir": str(p.parent), "root": str(root),
+        "view": view_path(p).as_uri(), "links": links,
         "mtime": mt, "live": live_path(p).as_uri(), "srv": SERVERJS.as_uri(), "tok": token(p, key) if key else "",
         "folder": [{"name": str(f.relative_to(root)), "path": str(f), "view": view_path(f).as_uri()} for f in folder],
         "recent": [{"name": r.name, "path": str(r), "dir": str(r.parent), "view": view_path(r).as_uri()} for r in recent],
@@ -376,6 +442,11 @@ def clean():
     print(f"deleted {n} saved pages ({size / 1024 / 1024:.1f} MB) from {VIEWS} (backups in {BACKUPS} kept)")
 
 
+def known_files():
+    """files the reader opened recently (recent list + files the watcher follows)"""
+    return set(load_json(RECENT, [])) | set(active_watch())
+
+
 def reveal(url):
     """mdreader://reveal?path=/abs/file.md -> show the file in the file manager.
     Any web page can call this link, so: only files the reader opened, folders only, never runs anything."""
@@ -392,6 +463,54 @@ def reveal(url):
         subprocess.Popen(["nautilus", "--select", str(p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     else:
         subprocess.Popen(["xdg-open", str(p.parent)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def link_allowed(target, src, known):
+    """may mdreader://open show this file? Any web page can call the link, so only Markdown files that
+    (a) a note the reader opened links to, or (b) lie in the folder of an opened file (2 subfolder levels, no hidden parts)."""
+    if src and src in known:
+        sp = pathlib.Path(src)
+        txt = read_text(sp)
+        if txt is not None and any(real == target for _, real in note_links(txt, sp.parent)):
+            return True
+    for k in known:
+        root = pathlib.Path(k).resolve().parent
+        try:
+            rel = target.relative_to(root).parts
+        except ValueError:
+            continue
+        if len(rel) - 1 <= MAX_DEPTH and not any(x.startswith(".") for x in rel):
+            return True
+    return False
+
+
+def notify(msg):
+    """a link click has no terminal: say it on the desktop"""
+    if shutil.which("notify-send"):
+        subprocess.Popen(["notify-send", "-a", "Markdown Reader", "-i", "mdreader", "Markdown Reader", msg],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def open_link(url):
+    """mdreader://open?path=/abs/note.md&h=heading&from=/abs/source.md : a link in a note whose page was not
+    prepared (link added after mdview ran). Opens it like `mdview note.md`. Never runs anything."""
+    q = parse_qs(urlparse(url).query)
+    raw, src, h = q.get("path", [""])[0], q.get("from", [""])[0], q.get("h", [""])[0][:200]
+    if not raw.startswith("/"):
+        return
+    p = pathlib.Path(os.path.normpath(raw))
+    if p.suffix.lower() not in MD_EXT:
+        return
+    try:
+        real = p.resolve()
+        ok = real.is_file() and real.suffix.lower() in MD_EXT and real.stat().st_size <= MAX_BYTES
+    except OSError:
+        ok = False
+    if not ok:
+        return notify(f"Linked note not found:\n{p}")
+    if not link_allowed(real, src, known_files()):
+        return notify(f"Not opened (not linked from an open note, and not in an opened folder):\n{real}")
+    open_files([real], jump=h)
 
 
 def ensure_scheme():
@@ -442,7 +561,7 @@ def main():
     if args and args[0] == "--clean":
         clean(); return
     if args and args[0].startswith("mdreader:"):
-        reveal(args[0]); return
+        (open_link if urlparse(args[0]).netloc == "open" else reveal)(args[0]); return
     if args and args[0] in ("-h", "--help"):
         print(__doc__); return
     if not args:
@@ -451,6 +570,20 @@ def main():
             if sys.stdin.isatty():
                 print(__doc__)
             return
+    files = []
+    for a in args:
+        p = to_path(a)
+        if p.is_file():
+            files.append(p)
+        else:
+            print(f"NOT FOUND: {p}")
+    if not files:
+        sys.exit(1)
+    open_files(files)
+
+
+def open_files(files, jump=""):
+    """prepare pages (the files, their folders, recent files, files they link to) and open the files"""
     if not TEMPLATE.exists():
         print(f"NOT FOUND: {TEMPLATE}"); sys.exit(1)
     VIEWS.mkdir(parents=True, exist_ok=True)
@@ -472,16 +605,6 @@ def main():
             if now - old.stat().st_mtime > BACKUP_DAYS * 86400:
                 old.unlink(missing_ok=True)
 
-    files = []
-    for a in args:
-        p = to_path(a)
-        if p.is_file():
-            files.append(p)
-        else:
-            print(f"NOT FOUND: {p}")
-    if not files:
-        sys.exit(1)
-
     recent = [r for r in load_json(RECENT, []) if pathlib.Path(r).is_file()]
     for p in files:                                      # newest first, no duplicates
         recent = [str(p)] + [r for r in recent if r != str(p)]
@@ -492,22 +615,48 @@ def main():
         pass
     recent_p = [pathlib.Path(r) for r in recent]
 
-    watch = {p: v for p, v in load_json(WATCH, {}).items() if now - v.get("t", 0) < WATCH_HOURS * 3600}
-    done = set()
+    # which pages to build: file -> (its folder list, folder root)
+    plan = {}
     for p in files:
         root = p.parent
         folder = collect(root)
         if p not in folder:
             folder.insert(0, p)
-        for t in list(folder) + recent_p:                # prepare folder files + recent so sidebar links work
-            if t in done:
-                continue
-            # a recent file outside this folder gets only itself in its folder list
-            mt = write_view(t, folder, root, recent_p, template, offline, key) if t in folder else \
-                 write_view(t, [t], t.parent, recent_p, template, offline, key)
-            if mt:
-                done.add(t)
-                watch[str(t)] = {"live": str(live_path(t)), "mtime": mt, "t": now}
+        for t in folder:
+            plan.setdefault(t, (folder, root))
+    for r in recent_p:                                   # a recent file outside these folders lists only itself
+        plan.setdefault(r, ([r], r.parent))
+    # files the opened notes, their folder and the recent files link to (one step) get a page too
+    have = {str(t.resolve()) for t in plan}
+    extra = []
+    for t in list(plan):
+        if len(extra) >= MAX_LINKED:
+            break
+        txt = read_text(t)
+        for _, real in (note_links(txt, t.parent) if txt is not None else []):
+            if str(real) not in have and len(extra) < MAX_LINKED:
+                have.add(str(real)); extra.append(real)
+    for real in extra:
+        plan.setdefault(real, ([real], real.parent))
+
+    watch = {p: v for p, v in load_json(WATCH, {}).items() if now - v.get("t", 0) < WATCH_HOURS * 3600}
+    pages = {}                                           # resolved path -> page URI, for the links maps
+    for p in watch:                                      # pages from earlier runs that live reload still follows
+        if view_path(pathlib.Path(p)).exists():
+            try:
+                pages[str(pathlib.Path(p).resolve())] = view_path(pathlib.Path(p)).as_uri()
+            except OSError:
+                pass
+    for t in plan:
+        pages[str(t)] = view_path(t).as_uri()
+        try:
+            pages.setdefault(str(t.resolve()), view_path(t).as_uri())
+        except OSError:
+            pass
+    for t, (folder, root) in plan.items():
+        mt = write_view(t, folder, root, recent_p, template, offline, key, pages)
+        if mt:
+            watch[str(t)] = {"live": str(live_path(t)), "mtime": mt, "t": now}
     try:
         write_atomic(WATCH, json.dumps(watch))
     except Exception:
@@ -515,7 +664,12 @@ def main():
     start_watcher()
     ensure_scheme()
     for p in files:
-        subprocess.Popen(["xdg-open", str(view_path(p))], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        target = view_path(p)
+        if jump:                                         # xdg-open drops #fragments: a tiny redirect page keeps it
+            target = VIEWS / f"jump-{secrets.token_hex(6)}.html"
+            url = html.escape(view_path(p).as_uri() + "#" + quote(jump, safe=""), quote=True)
+            write_atomic(target, f'<!DOCTYPE html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url={url}">\n')
+        subprocess.Popen(["xdg-open", str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 main()

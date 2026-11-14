@@ -1,4 +1,4 @@
-# Markdown Reader (mdreader) - CONTEXT (15 Nov 2026, v1.4.0)
+# Markdown Reader (mdreader) - CONTEXT (15 Nov 2026, v1.5.0)
 
 Markdown reader + editor for Ubuntu. Double-click a .md (or `mdview FILE.md`, alias `md`, or the app grid icon -> file picker) -> the file opens rendered in the default browser. Works offline, no network requests.
 This file is in a PUBLIC repo: no platform paths, server names, keys or private notes here.
@@ -27,10 +27,12 @@ This file is in a PUBLIC repo: no platform paths, server names, keys or private 
 - Offline: if all 5 libraries exist in /usr/share/mdreader/lib (or ~/mdreader/lib), each cdnjs <script> becomes file:///usr/share/mdreader/lib/<name> (integrity attrs dropped: SRI fails on file://), the Google Fonts link becomes lib/fonts.css, preconnect removed, and a CSP <meta> is added: default-src 'none'; script-src file: + sha256 of every inline script on the page; style-src file: 'unsafe-inline'; font-src file: data:; img-src file: data: blob: https:; connect-src http://127.0.0.1:*; base-uri file:; form-action/frame-src/object-src 'none'. Order in <head>: charset, CSP, base, __MD script.
 - Save helper: inside the watcher process, HTTPServer on 127.0.0.1:<random port>, port in server.json + views/server.js (page loads it by script tag). POST /save {path, tok, base, text}: Origin must be "null", Host exactly 127.0.0.1:port, JSON content type (forces a CORS preflight), body <= 8 MB; tok = HMAC-SHA256(~/mdreader/secret, path) so a page can only save its own file; path must be in watch.json (opened in the last 24 h) with a Markdown extension; base mtime must match (else 409); backup to ~/mdreader/backups/<view-stem>-<time>.md (deleted after 30 days); CRLF kept; atomic replace with the same mode. A watcher without a matching server.json (older version) is restarted.
 - No arguments (app grid): zenity file picker (multiple, starts in the folder of the last recent file); cancelled = nothing.
-- `mdview FILE.md ...`: builds a page per file in ~/mdreader/views/<stem>-<sha1(path)[:8]>.html = reader.html + `<base href="file://DIR/">` + `window.__MD={text,name,path,dir,root,mtime,live,folder[],recent[]}`; opens it with xdg-open.
+- `mdview FILE.md ...`: builds a page per file in ~/mdreader/views/<stem>-<sha1(path)[:8]>.html = reader.html + `<base href="file://DIR/">` + `window.__MD={text,name,path,dir,root,view,links{},mtime,live,folder[],recent[]}`; opens it with xdg-open (main() parses args, open_files() does the work).
 - Folder view: prepares a page for every .md in the file's folder + 2 subfolder levels (skips hidden, node_modules, build, dist, venv, __pycache__, _archive; max 300; files before subfolders) and for the 15 recent files (recent.json). Sidebar links open those pages in the same tab.
 - Live reload: starts one watcher per user (`mdview --watch`, detached; pid in watch.pid). It follows every prepared file in watch.json for 24 h; on save it rewrites views/<name>.live.js = `__mdLive(mtime_ns, text)`. The page loads that script every second (script tags work file:// -> file://, fetch does not) and re-renders in place keeping the scroll position.
 - `--default`: xdg-mime default for .md and mdreader://. `--stop`: stop watcher. `--clean`: stop watcher, delete views/*, watch.json, watch.pid (keeps recent + positions).
+- Links between notes (1.5.0): note_links() finds `[t](x.md)`, `[id]: x.md`, `<a href>` (fenced/inline code skipped; relative, absolute, file://, `<a b.md>`, #heading and ?query stripped) -> (key, real). key = os.path.normpath of the path the browser computes from the <base> (no symlinks resolved), real = resolve(). Pages are built for: the files, their folders, the recent files, plus every file those link to (one step, max 100 extra; MAX_LINKED). Each page gets `links` = {key: page URI} for targets that have a page (this run or still watched). reader.html noteLink() rewrites the href: same note -> `#hash`; page known -> page + `#hash`; else `mdreader://open?path=&h=&from=` (link added after the run, or two steps away). Linked pages get tokens + watch entries, so edit and live reload work there. jumpToHash() scrolls to `#heading` after render (beats the saved position); falls back to slugBase(hash).
+- `mdreader://open?path=<abs .md>&h=<heading>&from=<note>`: open_link() -> open_files([file], jump=h). Any web page can call it, so: absolute path, Markdown extension, existing file <= 3 MB, AND (from is a known file whose text links to it, OR it lies under the folder of a known file, <= 2 subfolder levels, no hidden parts). Known = recent.json + active watch.json. Refused / missing -> notify-send message. Heading kept through views/jump-<random>.html (meta refresh; xdg-open drops #fragments; removed by the 2-day clean-up).
 - `mdreader://reveal?path=<file>` (the 📂 button): reveal() runs `nautilus --select <file>` (else xdg-open on the folder). Only paths in recent.json/watch.json (any web page can call the link). Opens folders only, never runs files. Scheme registered on every run (ensure_scheme). Chrome asks once ("Always allow").
 - Clean-up: at every mdview start, pages not refreshed for 2 days are deleted.
 - file:// arguments are URL-decoded (names with spaces work).
@@ -50,7 +52,7 @@ This file is in a PUBLIC repo: no platform paths, server names, keys or private 
 - Pages live in ~/mdreader (visible folder) because snap Firefox cannot read /tmp or hidden folders.
 
 ## History
-- 1.0.0 first release. 1.0.1 scroll jitter fix. 1.1.1 folder view, recent files, reading position. 1.2.0 live reload, search. 1.2.1 `--clean`. 1.3.0 📂 show in folder, file-URI decoding. 1.4.0 offline (vendored libs, CSP), editor + save helper, DOMPurify 3.4.14 and Mermaid 11.16.1 (XSS fixes), private file modes, 📂 limited to known files, app grid opens a file picker, own icon; fix: Mermaid diagrams with `-->` now render.
+- 1.0.0 first release. 1.0.1 scroll jitter fix. 1.1.1 folder view, recent files, reading position. 1.2.0 live reload, search. 1.2.1 `--clean`. 1.3.0 📂 show in folder, file-URI decoding. 1.5.0 links between notes (build-time scan + mdreader://open fallback, #heading jumps). 1.4.0 offline (vendored libs, CSP), editor + save helper, DOMPurify 3.4.14 and Mermaid 11.16.1 (XSS fixes), private file modes, 📂 limited to known files, app grid opens a file picker, own icon; fix: Mermaid diagrams with `-->` now render.
 - Security clean-up (15 Nov): history rewritten to the noreply email; GitHub "keep email private" + "block pushes that expose email" ON.
 
 ## Release routine
@@ -65,14 +67,15 @@ This file is in a PUBLIC repo: no platform paths, server names, keys or private 
 - Not in the Snap Store / Ubuntu archive (GitHub release only).
 - Saving needs the watcher (stops 24 h after the last mdview run): Save then says so; run mdview on the file again.
 - Live reload follows a file for 24 h after mdview last prepared it.
+- Links in a note are mapped when mdview builds the page; a link added later (or a note two links away) goes through mdreader://open: Chrome asks once to open xdg-open, and the note opens in a new tab.
 - Folder/Recent pages are snapshots from the mdview run until opened (then live reload updates them).
 
-## Roadmap (priority after 4: 5, 8)
+## Roadmap (priority now: 5, 8)
 1. DONE 1.2.0 - Live reload.
 2. DONE 1.4.0 - Offline mode + editor.
 3. DONE 1.2.0 - Search in document.
-4. NEXT - Links between notes: a link to another .md opens it in the reader.
-5. Book tags: show @recall, @step, @check, @solved etc. as styled boxes (paste files read like the book).
+4. DONE 1.5.0 - Links between notes: a link to another .md opens it in the reader.
+5. NEXT - Book tags: show @recall, @step, @check, @solved etc. as styled boxes (paste files read like the book).
 6. Print / PDF: clean handout layout, page breaks before chapters.
 7. DONE 1.1.1 - Folder view.
 8. Presentation mode: each --- or # heading becomes a full-screen slide (teach from notes).

@@ -295,7 +295,8 @@ function restoreMath(html, store){
 /* ---------- marked setup ---------- */
 const slugCount = {};
 const mermaidSrc = [];   // diagram sources stay in JS: the sanitizer removes attributes that contain "-->"
-const slug = t => { let s = t.toLowerCase().replace(/<[^>]+>/g,'').replace(/[^\wÀ-￿\- ]+/g,'').trim().replace(/\s+/g,'-') || 'section';
+const slugBase = t => t.toLowerCase().replace(/<[^>]+>/g,'').replace(/[^\wÀ-￿\- ]+/g,'').trim().replace(/\s+/g,'-') || 'section';
+const slug = t => { let s = slugBase(t);
   if (slugCount[s] != null) s += '-' + (++slugCount[s]); else slugCount[s] = 0; return s; };
 marked.use({
   gfm: true, breaks: false,
@@ -346,8 +347,8 @@ async function renderNow(src, name, opts){
   doc.hidden = false; $('#drop').hidden = true;
   $('#fname').textContent = name; document.title = name.replace(/\.(md|markdown)$/i,'') + ' — Markdown Reader';
 
-  // links open outside; headings get ids/anchors
-  doc.querySelectorAll('a[href]').forEach(a => { if (!a.getAttribute('href').startsWith('#')) { a.target = '_blank'; a.rel = 'noopener'; } });
+  // links to other notes open in the reader, other links open outside; headings get ids/anchors
+  doc.querySelectorAll('a[href]').forEach(a => { if (!a.getAttribute('href').startsWith('#') && !noteLink(a)) { a.target = '_blank'; a.rel = 'noopener'; } });
   const heads = [...doc.querySelectorAll('h1,h2,h3,h4')];
   heads.forEach(h => { h.id = slug(h.textContent); const a = document.createElement('a'); a.className='anchor'; a.href='#'+h.id; a.textContent='#'; h.append(a); });
   doc.querySelectorAll('pre .copy').forEach(b => b.onclick = async () => {
@@ -364,7 +365,35 @@ async function renderNow(src, name, opts){
   await rerunMermaid();
   restoring = false;
   if (live) { scrollTo(0, keepY); if (!$('#find').hidden && $('#findQ').value) runFind($('#findQ').value, true); }
-  else restorePos();
+  else if (!jumpToHash()) restorePos();
+}
+
+/* links between notes: mdview prepared a page for each linked .md (M.links: path -> page);
+   a link added later goes to mdreader://open, which asks mdview to prepare and open it */
+function noteLink(a){
+  if (!M || !M.path) return false;
+  let u; try { u = new URL(a.href); } catch { return false; }
+  if (u.protocol !== 'file:') return false;
+  let path, hash = '';
+  try { path = decodeURIComponent(u.pathname); hash = u.hash ? decodeURIComponent(u.hash.slice(1)) : ''; } catch { return false; }
+  if (!/\.(md|markdown|mdown|mkd)$/i.test(path)) return false;
+  const view = M.links && Object.prototype.hasOwnProperty.call(M.links, path) ? M.links[path] : null;
+  if (view && view === M.view) a.setAttribute('href', '#' + hash);                     // link to this same note
+  else if (view) a.href = view + (hash ? '#' + encodeURIComponent(hash) : '');
+  else a.href = 'mdreader://open?path=' + encodeURIComponent(path) + (hash ? '&h=' + encodeURIComponent(hash) : '') + '&from=' + encodeURIComponent(M.path);
+  a.title = path + (hash ? ' › ' + hash : '');
+  a.classList.add('note-link');
+  return true;
+}
+function hashTarget(h){
+  let id; try { id = decodeURIComponent(h); } catch { id = h; }
+  return id ? (document.getElementById(id) || document.getElementById(slugBase(id))) : null;
+}
+function jumpToHash(){
+  if (!location.hash) return false;
+  const t = hashTarget(location.hash.slice(1));
+  if (t) t.scrollIntoView();
+  return true;                                            // a #heading in the address wins over the saved position
 }
 
 const M = window.__MD || null;
@@ -508,8 +537,10 @@ $('#demoBtn').onclick = () => render(SAMPLE, 'sample.md');
 /* in-page links: scroll instead of navigating (a <base> tag may point elsewhere) */
 document.addEventListener('click', e => {
   const a = e.target.closest('a[href^="#"]'); if (!a) return;
-  const t = document.getElementById(decodeURIComponent(a.getAttribute('href').slice(1)));
-  if (t) { e.preventDefault(); t.scrollIntoView({behavior:'smooth'}); }
+  const h = a.getAttribute('href').slice(1);
+  e.preventDefault();
+  const t = hashTarget(h);
+  if (t) t.scrollIntoView({behavior:'smooth'}); else if (!h) scrollTo({top:0, behavior:'smooth'});
 });
 
 /* ---------- search in document ---------- */

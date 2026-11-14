@@ -1,5 +1,5 @@
 Package: mdreader
-Version: 1.4.0
+Version: 1.5.0
 Section: text
 Priority: optional
 Architecture: all
@@ -10,4 +10,5 @@ Description: Clean Markdown reader and editor (opens .md files in the browser)
  Renders Markdown with book-style typography, LaTeX maths (MathJax),
  code highlighting, tables, task lists, Mermaid diagrams and callouts.
  Works offline: all libraries and fonts are included, pages make no
- network requests. Built-in editor with live preview. Command: mdview FILE.md
+ network requests. Built-in editor with live preview. Links between
+ notes open in the reader. Command: mdview FILE.md
