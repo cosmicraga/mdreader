@@ -1,0 +1,4 @@
+#!/bin/sh
+set -e
+command -v update-desktop-database >/dev/null && update-desktop-database -q /usr/share/applications || true
+echo "Markdown Reader installed. Run 'mdview --default' once to open .md files with it on double-click."

@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Markdown Reader</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;0,8..60,700;1,8..60,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+window.MathJax = {
+  tex: { inlineMath: [['\\(', '\\)']], displayMath: [['\\[', '\\]']], packages: {'[+]': ['ams']}, tags: 'ams' },
+  svg: { fontCache: 'global' },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] },
+  startup: { typeset: false }
+};
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-svg-full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
+<style>
+:root{
+  --bg:#fbfaf7; --panel:#f3f1ec; --text:#1f2328; --muted:#6b6f76; --line:#e2dfd8;
+  --accent:#2457c5; --code-bg:#f2f0ea; --quote:#8a6d3b; --mark:#fff1a8;
+  --serif:'Source Serif 4',Georgia,serif; --sans:'Inter',system-ui,sans-serif; --mono:'JetBrains Mono',ui-monospace,monospace;
+  --fs:18px;
+}
+[data-theme=dark]{
+  --bg:#16181c; --panel:#1d2025; --text:#e3e5e8; --muted:#9097a1; --line:#2d3139;
+  --accent:#7aa7ff; --code-bg:#1f2329; --quote:#d6b46a; --mark:#5c4d12;
+}
+[data-theme=sepia]{
+  --bg:#f4ecd8; --panel:#ebe1c8; --text:#3b2f22; --muted:#7a6a55; --line:#d9cbab;
+  --accent:#8a4b16; --code-bg:#ece2c9; --quote:#7a5a2a; --mark:#f3d98a;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);transition:background .2s,color .2s}
+
+/* top bar */
+.bar{position:sticky;top:0;z-index:10;display:flex;align-items:center;gap:8px;padding:8px 14px;
+  background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);font-size:13px}
+.bar .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:40vw}
+.bar .sp{flex:1}
+.btn{font:inherit;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:5px 10px;cursor:pointer}
+.btn:hover{border-color:var(--accent)}
+.btn.icon{padding:5px 9px}
+select.btn{padding:4px 6px}
+#progress{position:absolute;left:0;bottom:-1px;height:2px;background:var(--accent);width:0}
+
+/* layout */
+.wrap{display:flex;align-items:flex-start}
+#toc{position:sticky;top:46px;width:260px;flex:none;max-height:calc(100vh - 46px);overflow:auto;padding:22px 14px 40px 18px;
+  font-size:13px;border-right:1px solid var(--line)}
+#toc.hidden{display:none}
+#toc .t{font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-size:11px;margin-bottom:10px}
+#toc a{display:block;color:var(--muted);text-decoration:none;padding:3px 6px;border-radius:5px;line-height:1.35}
+#toc a:hover{color:var(--text);background:var(--panel)}
+#toc a.on{color:var(--accent);background:var(--panel)}
+#toc .l2{padding-left:16px}#toc .l3{padding-left:28px;font-size:12.5px}#toc .l4{padding-left:40px;font-size:12px}
+main{flex:1;min-width:0;padding:40px 24px 120px}
+
+/* drop zone */
+#drop{max-width:620px;margin:10vh auto;border:2px dashed var(--line);border-radius:16px;padding:48px 28px;text-align:center;color:var(--muted)}
+#drop h1{font-family:var(--serif);color:var(--text);font-weight:600;margin:0 0 10px;font-size:30px}
+#drop.over{border-color:var(--accent);background:var(--panel)}
+#drop .row{display:flex;gap:10px;justify-content:center;margin:22px 0 10px;flex-wrap:wrap}
+#paste{width:100%;min-height:120px;margin-top:14px;font:13px var(--mono);background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px;resize:vertical}
+body.dragging::after{content:"Drop .md file";position:fixed;inset:0;display:grid;place-items:center;font:600 28px var(--sans);
+  color:var(--accent);background:color-mix(in srgb,var(--bg) 85%,transparent);border:3px dashed var(--accent);z-index:99}
+
+/* ---------- article typography ---------- */
+#doc{max-width:760px;margin:0 auto;font-family:var(--serif);font-size:var(--fs);line-height:1.7;
+  font-variant-numeric:oldstyle-nums;hyphens:auto;overflow-wrap:break-word}
+#doc.sansf{font-family:var(--sans);font-size:calc(var(--fs) - 1px)}
+#doc.wide{max-width:1000px}
+#doc > :first-child{margin-top:0}
+#doc h1,#doc h2,#doc h3,#doc h4,#doc h5,#doc h6{font-family:var(--serif);font-weight:700;line-height:1.25;margin:1.9em 0 .6em;scroll-margin-top:64px;font-variant-numeric:lining-nums}
+#doc h1{font-size:2.1em;letter-spacing:-.01em;margin-top:.4em}
+#doc h2{font-size:1.55em;padding-bottom:.25em;border-bottom:1px solid var(--line)}
+#doc h3{font-size:1.25em}
+#doc h4{font-size:1.06em}
+#doc h5,#doc h6{font-size:.95em;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+#doc .anchor{opacity:0;margin-left:.3em;color:var(--muted);text-decoration:none;font-weight:400}
+#doc :is(h1,h2,h3,h4):hover .anchor{opacity:1}
+#doc p{margin:0 0 1.05em}
+#doc a{color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px}
+#doc strong{font-weight:700}
+#doc mark{background:var(--mark);color:inherit;padding:0 .15em;border-radius:3px}
+#doc ul,#doc ol{padding-left:1.6em;margin:0 0 1.05em}
+#doc li{margin:.25em 0}
+#doc li > p{margin:.3em 0}
+#doc li::marker{color:var(--muted)}
+#doc ul.contains-task-list,#doc li.task-list-item{list-style:none}
+#doc li.task-list-item{margin-left:-1.3em}
+#doc li.task-list-item input{margin-right:.5em;transform:translateY(1px);accent-color:var(--accent)}
+#doc blockquote{margin:1.2em 0;padding:.2em 1.1em;border-left:3px solid var(--quote);color:var(--muted);font-style:italic}
+#doc blockquote p:last-child{margin-bottom:.3em}
+#doc hr{border:0;height:1px;background:var(--line);margin:2.4em 0}
+#doc img{max-width:100%;height:auto;border-radius:6px;display:block;margin:1em auto}
+#doc code{font-family:var(--mono);font-size:.84em;background:var(--code-bg);padding:.12em .38em;border-radius:5px;font-variant-numeric:normal}
+#doc pre{position:relative;background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow:auto;margin:1.2em 0;line-height:1.55}
+#doc pre code{background:none;padding:0;font-size:.8em;white-space:pre}
+#doc pre .lang{position:absolute;top:6px;right:10px;font:500 10.5px var(--sans);color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+#doc pre .copy{position:absolute;top:4px;right:8px;opacity:0;font:12px var(--sans)}
+#doc pre:hover .copy{opacity:1}#doc pre:hover .lang{opacity:0}
+#doc .tablewrap{overflow-x:auto;margin:1.3em 0}
+#doc table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.86em;font-variant-numeric:tabular-nums lining-nums}
+#doc th,#doc td{border:1px solid var(--line);padding:.5em .75em;text-align:left;vertical-align:top}
+#doc th{background:var(--panel);font-weight:600}
+#doc tr:nth-child(even) td{background:color-mix(in srgb,var(--panel) 45%,transparent)}
+#doc details{border:1px solid var(--line);border-radius:8px;padding:.5em 1em;margin:1em 0}
+#doc summary{cursor:pointer;font-weight:600}
+#doc kbd{font:.8em var(--mono);border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:.05em .35em;background:var(--panel)}
+#doc .footnotes{font-size:.88em;color:var(--muted);border-top:1px solid var(--line);margin-top:3em;padding-top:1em}
+#doc mjx-container[display="true"]{overflow-x:auto;overflow-y:hidden;margin:1.1em 0 !important;padding:.2em 0}
+#doc mjx-container{font-variant-numeric:normal}
+#doc .mermaid{display:flex;justify-content:center;margin:1.4em 0}
+/* GitHub-style callouts */
+#doc .callout{border-left:4px solid var(--c);background:color-mix(in srgb,var(--c) 9%,transparent);border-radius:0 8px 8px 0;padding:.6em 1em;margin:1.2em 0;font-style:normal;color:var(--text)}
+#doc .callout .ct{font:600 .82em var(--sans);color:var(--c);text-transform:uppercase;letter-spacing:.05em;margin-bottom:.25em}
+#doc .callout p:last-child{margin-bottom:0}
+
+/* highlight.js theme (inline) */
+.hljs-comment,.hljs-quote{color:#8b949e;font-style:italic}
+.hljs-keyword,.hljs-selector-tag,.hljs-literal,.hljs-type{color:#b0306b}
+.hljs-string,.hljs-regexp,.hljs-addition{color:#22863a}
+.hljs-number,.hljs-symbol,.hljs-bullet{color:#a65e00}
+.hljs-title,.hljs-section,.hljs-function .hljs-title{color:#5a3fc4}
+.hljs-attr,.hljs-attribute,.hljs-variable,.hljs-template-variable,.hljs-built_in{color:#0b6db0}
+.hljs-meta{color:#6b7280}.hljs-deletion{color:#c62828}
+[data-theme=dark] .hljs-keyword,[data-theme=dark] .hljs-selector-tag,[data-theme=dark] .hljs-literal,[data-theme=dark] .hljs-type{color:#ff7ab6}
+[data-theme=dark] .hljs-string,[data-theme=dark] .hljs-regexp{color:#8fdc8f}
+[data-theme=dark] .hljs-number{color:#f2b36b}
+[data-theme=dark] .hljs-title,[data-theme=dark] .hljs-section{color:#c3a6ff}
+[data-theme=dark] .hljs-attr,[data-theme=dark] .hljs-built_in,[data-theme=dark] .hljs-variable{color:#79c0ff}
+
+@media (max-width:900px){#toc{display:none}main{padding:24px 16px 100px}}
+@media print{.bar,#toc{display:none}main{padding:0}#doc{max-width:none}}
+</style>
+</head>
+<body>
+<div class="bar">
+  <button class="btn icon" id="tocBtn" title="Contents">☰</button>
+  <span class="name" id="fname">Markdown Reader</span>
+  <span class="sp"></span>
+  <button class="btn" id="openBtn">Open .md</button>
+  <select class="btn" id="font" title="Typeface"><option value="serif">Serif</option><option value="sans">Sans</option></select>
+  <button class="btn icon" id="smaller" title="Smaller text">A−</button>
+  <button class="btn icon" id="bigger" title="Larger text">A+</button>
+  <button class="btn icon" id="width" title="Toggle wide layout">↔</button>
+  <select class="btn" id="theme" title="Theme"><option value="light">Light</option><option value="sepia">Sepia</option><option value="dark">Dark</option></select>
+  <input type="file" id="file" accept=".md,.markdown,.mdown,.mkd,.txt,text/markdown,text/plain" hidden>
+  <div id="progress"></div>
+</div>
+
+<div class="wrap">
+  <nav id="toc" class="hidden"></nav>
+  <main>
+    <div id="drop">
+      <h1>Markdown Reader</h1>
+      <div>Open or drop a <b>.md</b> file. Supports GFM tables, task lists, footnotes-style links, code highlighting, LaTeX math (<code>$…$</code>, <code>$$…$$</code>, <code>\(…\)</code>, <code>\[…\]</code>), Mermaid diagrams and GitHub callouts.</div>
+      <div class="row">
+        <button class="btn" id="openBtn2">Choose file…</button>
+        <button class="btn" id="demoBtn">Show sample</button>
+      </div>
+      <textarea id="paste" placeholder="…or paste Markdown here and press Ctrl/⌘ + Enter"></textarea>
+    </div>
+    <article id="doc" hidden></article>
+  </main>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const store = { get(k,d){try{return localStorage.getItem(k)??d}catch{return d}}, set(k,v){try{localStorage.setItem(k,v)}catch{}} };
+
+/* ---------- preferences ---------- */
+let fs = +store.get('mdr-fs', 18);
+const applyPrefs = () => {
+  document.documentElement.style.setProperty('--fs', fs + 'px');
+  document.documentElement.dataset.theme = $('#theme').value;
+  $('#doc').classList.toggle('sansf', $('#font').value === 'sans');
+  $('#doc').classList.toggle('wide', store.get('mdr-wide','0') === '1');
+};
+$('#theme').value = store.get('mdr-theme', matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+$('#font').value = store.get('mdr-font', 'serif');
+applyPrefs();
+$('#theme').onchange = () => { store.set('mdr-theme', $('#theme').value); applyPrefs(); rerunMermaid(); };
+$('#font').onchange = () => { store.set('mdr-font', $('#font').value); applyPrefs(); };
+$('#smaller').onclick = () => { fs = Math.max(13, fs - 1); store.set('mdr-fs', fs); applyPrefs(); };
+$('#bigger').onclick = () => { fs = Math.min(28, fs + 1); store.set('mdr-fs', fs); applyPrefs(); };
+$('#width').onclick = () => { store.set('mdr-wide', store.get('mdr-wide','0') === '1' ? '0' : '1'); applyPrefs(); };
+$('#tocBtn').onclick = () => $('#toc').classList.toggle('hidden');
+
+/* ---------- file input ---------- */
+const openFile = () => $('#file').click();
+$('#openBtn').onclick = openFile; $('#openBtn2').onclick = openFile;
+$('#file').onchange = e => { const f = e.target.files[0]; if (f) readFile(f); e.target.value = ''; };
+function readFile(f){ const r = new FileReader(); r.onload = () => render(r.result, f.name); r.readAsText(f); }
+let depth = 0;
+addEventListener('dragenter', e => { e.preventDefault(); depth++; document.body.classList.add('dragging'); });
+addEventListener('dragleave', () => { if (--depth <= 0) { depth = 0; document.body.classList.remove('dragging'); } });
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => { e.preventDefault(); depth = 0; document.body.classList.remove('dragging');
+  const f = e.dataTransfer.files[0]; if (f) readFile(f); });
+$('#paste').addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && e.target.value.trim()) render(e.target.value, 'Pasted text'); });
+
+/* ---------- math protection ---------- */
+// Pull math out before Markdown parsing so _ * \ inside formulas survive; skip code spans/blocks.
+function protectMath(src){
+  const store = [];
+  const keep = (tex, display) => { store.push({tex, display}); return `\uE000M${store.length - 1}\uE001`; };
+  // split out fenced code and inline code so they are untouched
+  const parts = src.split(/(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]+`)/g);
+  for (let i = 0; i < parts.length; i += 2) {
+    parts[i] = parts[i]
+      .replace(/\$\$([\s\S]+?)\$\$/g, (_, t) => keep(t, true))
+      .replace(/\\\[([\s\S]+?)\\\]/g, (_, t) => keep(t, true))
+      .replace(/\\begin\{(equation|align|gather|multline|eqnarray)(\*?)\}[\s\S]+?\\end\{\1\2\}/g, m => keep(m, true))
+      .replace(/\\\(([\s\S]+?)\\\)/g, (_, t) => keep(t, false))
+      .replace(/(^|[^\\$])\$(?!\s)((?:\\\$|[^$\n])+?)(?<!\s)\$(?!\d)/g, (_, pre, t) => pre + keep(t, false));
+  }
+  return { text: parts.join(''), store };
+}
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function restoreMath(html, store){
+  return html.replace(/\uE000M(\d+)\uE001/g, (_, i) => {
+    const m = store[+i];
+    if (/^\\begin/.test(m.tex)) return `<div class="mathd">${esc(m.tex)}</div>`;
+    return m.display ? `<div class="mathd">\\[${esc(m.tex)}\\]</div>` : `\\(${esc(m.tex)}\\)`;
+  });
+}
+
+/* ---------- marked setup ---------- */
+const slugCount = {};
+const slug = t => { let s = t.toLowerCase().replace(/<[^>]+>/g,'').replace(/[^\wÀ-￿\- ]+/g,'').trim().replace(/\s+/g,'-') || 'section';
+  if (slugCount[s] != null) s += '-' + (++slugCount[s]); else slugCount[s] = 0; return s; };
+marked.use({
+  gfm: true, breaks: false,
+  renderer: {
+    code(code, lang){
+      const l = (lang || '').trim().split(/\s+/)[0].toLowerCase();
+      if (l === 'mermaid') return `<div class="mermaid" data-src="${esc(code)}">${esc(code)}</div>`;
+      let out;
+      try { out = l && hljs.getLanguage(l) ? hljs.highlight(code, {language: l}).value : hljs.highlightAuto(code).value; }
+      catch { out = esc(code); }
+      return `<pre>${l ? `<span class="lang">${esc(l)}</span>` : ''}<button class="btn copy">Copy</button><code class="hljs">${out}</code></pre>`;
+    },
+    table(header, body){ return `<div class="tablewrap"><table><thead>${header}</thead><tbody>${body}</tbody></table></div>`; },
+    blockquote(quote){
+      const m = quote.match(/^\s*<p>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(<br>)?\n?/i);
+      if (m) {
+        const k = m[1].toUpperCase();
+        const col = {NOTE:'#2f81f7',TIP:'#2da44e',IMPORTANT:'#8250df',WARNING:'#bf8700',CAUTION:'#cf222e'}[k];
+        return `<blockquote class="callout" style="--c:${col}"><div class="ct">${k}</div><p>${quote.slice(m[0].length)}</blockquote>`;
+      }
+      return `<blockquote>${quote}</blockquote>`;
+    }
+  }
+});
+
+/* ---------- render ---------- */
+async function render(src, name){
+  for (const k in slugCount) delete slugCount[k];
+  src = src.replace(/^﻿/, '').replace(/^---\n[\s\S]*?\n---\n/, ''); // strip BOM + YAML front-matter
+  const { text, store: mstore } = protectMath(src);
+  let html = marked.parse(text);
+  html = restoreMath(html, mstore);
+  html = html.replace(/==([^=\n]+)==/g, '<mark>$1</mark>');
+  html = DOMPurify.sanitize(html, { ADD_ATTR: ['data-src','style'], ADD_TAGS: ['details','summary'] });
+
+  const doc = $('#doc');
+  doc.innerHTML = html;
+  doc.hidden = false; $('#drop').hidden = true;
+  $('#fname').textContent = name; document.title = name.replace(/\.(md|markdown)$/i,'') + ' — Markdown Reader';
+
+  // links open outside; headings get ids/anchors
+  doc.querySelectorAll('a[href]').forEach(a => { if (!a.getAttribute('href').startsWith('#')) { a.target = '_blank'; a.rel = 'noopener'; } });
+  const heads = [...doc.querySelectorAll('h1,h2,h3,h4')];
+  heads.forEach(h => { h.id = slug(h.textContent); const a = document.createElement('a'); a.className='anchor'; a.href='#'+h.id; a.textContent='#'; h.append(a); });
+  doc.querySelectorAll('pre .copy').forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.parentElement.querySelector('code').innerText); b.textContent='Copied'; }
+    catch { b.textContent='Select & copy'; }
+    setTimeout(() => b.textContent='Copy', 1400);
+  });
+
+  buildToc(heads);
+  scrollTo(0, 0);
+  try { MathJax.typesetClear([doc]); await MathJax.typesetPromise([doc]); } catch (e) { console.warn(e); }
+  rerunMermaid();
+}
+
+function buildToc(heads){
+  const toc = $('#toc');
+  if (heads.length < 2) { toc.innerHTML=''; toc.classList.add('hidden'); return; }
+  const min = Math.min(...heads.map(h => +h.tagName[1]));
+  toc.innerHTML = '<div class="t">Contents</div>' + heads.map(h =>
+    `<a href="#${h.id}" class="l${+h.tagName[1] - min + 1}">${esc(h.textContent.replace(/#$/,''))}</a>`).join('');
+  toc.classList.remove('hidden');
+}
+
+let mermaidN = 0;
+async function rerunMermaid(){
+  const nodes = [...document.querySelectorAll('#doc .mermaid')];
+  if (!nodes.length || !window.mermaid) return;
+  mermaid.initialize({ startOnLoad:false, securityLevel:'strict', theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'neutral' });
+  for (const n of nodes) {
+    const src = n.dataset.src.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');
+    try { const { svg } = await mermaid.render('mmd' + (mermaidN++), src); n.innerHTML = svg; }
+    catch { n.innerHTML = `<pre><code>${esc(src)}</code></pre>`; }
+  }
+}
+
+/* ---------- scroll progress + active TOC ---------- */
+addEventListener('scroll', () => {
+  const h = document.documentElement; const p = h.scrollTop / Math.max(1, h.scrollHeight - h.clientHeight);
+  $('#progress').style.width = (p * 100) + '%';
+  const heads = [...document.querySelectorAll('#doc :is(h1,h2,h3,h4)')];
+  let cur = heads[0]; for (const x of heads) { if (x.getBoundingClientRect().top < 90) cur = x; else break; }
+  document.querySelectorAll('#toc a').forEach(a => a.classList.toggle('on', cur && a.getAttribute('href') === '#' + cur.id));
+}, { passive: true });
+
+/* ---------- sample ---------- */
+const SAMPLE = `# Projectile Motion — Notes
+
+A body thrown with speed $u$ at angle $\\theta$ to the horizontal follows a **parabola**. Here is a short summary.
+
+## Key results
+
+$$
+R = \\frac{u^2 \\sin 2\\theta}{g}, \\qquad H = \\frac{u^2 \\sin^2\\theta}{2g}, \\qquad T = \\frac{2u\\sin\\theta}{g}
+$$
+
+Range is maximum at $\\theta = 45^\\circ$, giving $R_{\\max} = u^2/g$.
+
+> [!TIP]
+> Complementary angles ($\\theta$ and $90^\\circ - \\theta$) give the **same range**.
+
+### Equation of trajectory
+
+\\begin{align}
+y &= x\\tan\\theta - \\frac{g x^2}{2u^2\\cos^2\\theta} \\\\
+  &= x\\tan\\theta\\left(1 - \\frac{x}{R}\\right)
+\\end{align}
+
+## Quick table
+
+| Angle | Range (u = 20 m/s) | Max height |
+|------:|-------------------:|-----------:|
+| 30°   | 35.3 m             | 5.1 m      |
+| 45°   | 40.8 m             | 10.2 m     |
+| 60°   | 35.3 m             | 15.3 m     |
+
+## Checklist
+
+- [x] Resolve velocity into components
+- [x] Write equations separately for x and y
+- [ ] Eliminate $t$ to get the path
+
+## Code
+
+\`\`\`python
+import math
+def rng(u, th, g=9.8):
+    return u**2 * math.sin(2*math.radians(th)) / g
+print(rng(20, 45))   # 40.8
+\`\`\`
+
+## Flow
+
+\`\`\`mermaid
+graph LR
+  A[Given u, θ] --> B[Split into u cosθ, u sinθ]
+  B --> C[Time of flight]
+  C --> D[Range & height]
+\`\`\`
+
+---
+
+*Press* <kbd>A+</kbd> / <kbd>A−</kbd> *to resize text, and switch theme from the top bar.* ==Highlighted text== works too.
+`;
+$('#demoBtn').onclick = () => render(SAMPLE, 'sample.md');
+
+/* in-page links: scroll instead of navigating (a <base> tag may point elsewhere) */
+document.addEventListener('click', e => {
+  const a = e.target.closest('a[href^="#"]'); if (!a) return;
+  const t = document.getElementById(decodeURIComponent(a.getAttribute('href').slice(1)));
+  if (t) { e.preventDefault(); t.scrollIntoView({behavior:'smooth'}); }
+});
+
+/* opened by the mdview launcher: file content is embedded in window.__MD */
+if (window.__MD) {
+  const go = () => render(window.__MD.text, window.__MD.name);
+  if (window.MathJax && MathJax.startup && MathJax.startup.promise) MathJax.startup.promise.then(go, go); else go();
+}
+</script>
+</body>
+</html>

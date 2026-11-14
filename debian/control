@@ -1,0 +1,11 @@
+Package: mdreader
+Version: 1.0.0
+Section: text
+Priority: optional
+Architecture: all
+Depends: python3, xdg-utils
+Maintainer: Sanjib Sikder
+Description: Clean Markdown reader (opens .md files in the browser)
+ Renders Markdown with book-style typography, LaTeX maths (MathJax),
+ code highlighting, tables, task lists, Mermaid diagrams and callouts.
+ Reader only, no editor. Command: mdview FILE.md

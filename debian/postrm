@@ -1,0 +1,2 @@
+#!/bin/sh
+command -v update-desktop-database >/dev/null && update-desktop-database -q /usr/share/applications || true
