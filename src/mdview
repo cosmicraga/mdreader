@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """mdview FILE.md ...   open Markdown files in the Markdown Reader (browser)
-   mdview --default    make Markdown Reader the default app for .md files"""
+   mdview --default    make Markdown Reader the default app for .md files
+   mdview --stop       stop the live-reload watcher"""
 import sys, os, json, time, html, re, hashlib, subprocess, pathlib
 
 HOME = pathlib.Path.home()
 BASE = HOME / "mdreader"                 # visible folder: snap Firefox cannot read hidden dirs or /tmp
 VIEWS = BASE / "views"
 RECENT = BASE / "recent.json"
+WATCH = BASE / "watch.json"              # files the live-reload watcher follows
+PIDFILE = BASE / "watch.pid"
 TEMPLATE = pathlib.Path("/usr/share/mdreader/reader.html")
 if not TEMPLATE.exists():                # fallback for a home-folder install
     TEMPLATE = BASE / "reader.html"
@@ -17,16 +20,36 @@ MAX_BYTES = 3 * 1024 * 1024              # skip huge files in the folder list
 MAX_RECENT = 15
 MAX_DEPTH = 2                            # subfolder levels included in the folder list
 SKIP_DIRS = {"node_modules", "build", "dist", "venv", "__pycache__", "_archive"}
-KEEP_DAYS = 2
+KEEP_DAYS = 2                            # views not refreshed for this long are deleted
+WATCH_HOURS = 24                         # a file is watched this long after it was last prepared
 
 
+# ---------- helpers ----------
 def view_path(p):
     stem = re.sub(r"[^\w.-]+", "_", p.stem)[:50] or "file"
     return VIEWS / f"{stem}-{hashlib.sha1(str(p).encode()).hexdigest()[:8]}.html"
 
 
-def natural(p):
-    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", p.name)]
+def live_path(p):
+    return view_path(p).with_suffix(".live.js")
+
+
+def natural_part(s):
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
+
+
+def mtime(p):
+    return str(os.stat(p).st_mtime_ns)
+
+
+def write_atomic(path, text):
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def js_json(obj):
+    return json.dumps(obj).replace("</", "<\\/")
 
 
 def collect(root):
@@ -45,6 +68,7 @@ def collect(root):
                 pass
         if len(out) > MAX_FOLDER * 2:
             break
+
     def key(f):                                          # files before subfolders at every level
         parts = f.relative_to(root).parts
         return [(1, natural_part(x)) for x in parts[:-1]] + [(0, natural_part(parts[-1]))]
@@ -52,34 +76,101 @@ def collect(root):
     return out[:MAX_FOLDER]
 
 
-def natural_part(s):
-    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
-
-
-def load_recent():
+def load_json(path, default):
     try:
-        return [x for x in json.loads(RECENT.read_text()) if pathlib.Path(x).is_file()]
+        return json.loads(path.read_text())
     except Exception:
-        return []
+        return default
 
 
+# ---------- page building ----------
 def write_view(p, folder, root, recent, template):
     try:
         text = p.read_text(encoding="utf-8", errors="replace")
+        mt = mtime(p)
     except Exception:
-        return False
+        return None
     data = {
         "text": text, "name": p.name, "path": str(p), "dir": str(p.parent), "root": str(root),
+        "mtime": mt, "live": live_path(p).as_uri(),
         "folder": [{"name": str(f.relative_to(root)), "path": str(f), "view": view_path(f).as_uri()} for f in folder],
         "recent": [{"name": r.name, "path": str(r), "dir": str(r.parent), "view": view_path(r).as_uri()} for r in recent],
     }
-    payload = json.dumps(data).replace("</", "<\\/")
     base_href = html.escape(p.parent.as_uri() + "/", quote=True)   # relative images resolve next to the .md
-    inject = f'<base href="{base_href}">\n<script>window.__MD={payload};</script>\n'
-    view_path(p).write_text(template.replace("<head>", "<head>\n" + inject, 1), encoding="utf-8")
-    return True
+    inject = f'<base href="{base_href}">\n<script>window.__MD={js_json(data)};</script>\n'
+    write_atomic(view_path(p), template.replace("<head>", "<head>\n" + inject, 1))
+    write_atomic(live_path(p), f"window.__mdLive&&__mdLive({js_json(mt)},null);")
+    return mt
 
 
+# ---------- live-reload watcher ----------
+def watcher_running():
+    try:
+        pid = int(PIDFILE.read_text())
+        os.kill(pid, 0)
+        return "mdview" in pathlib.Path(f"/proc/{pid}/cmdline").read_text(errors="ignore")
+    except Exception:
+        return False
+
+
+def start_watcher():
+    if watcher_running():
+        return
+    subprocess.Popen([sys.executable, os.path.abspath(__file__), "--watch"],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+
+
+def watch_loop():
+    if watcher_running():
+        return
+    PIDFILE.write_text(str(os.getpid()))
+    last, data, wmt = {}, {}, None
+    try:
+        while True:
+            try:
+                m = WATCH.stat().st_mtime_ns
+                if m != wmt:
+                    wmt, data = m, load_json(WATCH, {})
+            except OSError:
+                data = {}
+            now = time.time()
+            active = {p: v for p, v in data.items() if now - v.get("t", 0) < WATCH_HOURS * 3600}
+            if not active:
+                break
+            for p, v in active.items():
+                try:
+                    mt = mtime(p)
+                except OSError:
+                    continue
+                if p not in last:
+                    last[p] = v.get("mtime", mt)          # the version the page was built with
+                if mt != last[p]:
+                    last[p] = mt
+                    try:
+                        text = pathlib.Path(p).read_text(encoding="utf-8", errors="replace")
+                        write_atomic(pathlib.Path(v["live"]), f"window.__mdLive&&__mdLive({js_json(mt)},{js_json(text)});")
+                    except Exception:
+                        pass
+            time.sleep(1)
+    finally:
+        try:
+            if PIDFILE.read_text() == str(os.getpid()):
+                PIDFILE.unlink()
+        except Exception:
+            pass
+
+
+def stop_watcher():
+    try:
+        pid = int(PIDFILE.read_text())
+        os.kill(pid, 15)
+        print("watcher stopped")
+    except Exception:
+        print("watcher was not running")
+
+
+# ---------- main ----------
 def main():
     args = sys.argv[1:]
     if args and args[0] == "--default":
@@ -87,6 +178,10 @@ def main():
             subprocess.run(["xdg-mime", "default", "mdreader.desktop", m])
         print("Markdown Reader is now the default app for .md files")
         return
+    if args and args[0] == "--watch":
+        watch_loop(); return
+    if args and args[0] == "--stop":
+        stop_watcher(); return
     if not args:
         print(__doc__); sys.exit(1)
     if not TEMPLATE.exists():
@@ -95,9 +190,10 @@ def main():
     template = TEMPLATE.read_text(encoding="utf-8")
 
     now = time.time()
-    for old in VIEWS.glob("*.html"):                     # views not refreshed for KEEP_DAYS are removed
-        if now - old.stat().st_mtime > KEEP_DAYS * 86400:
-            old.unlink(missing_ok=True)
+    for pat in ("*.html", "*.live.js", "*.tmp"):        # old views are removed
+        for old in VIEWS.glob(pat):
+            if now - old.stat().st_mtime > KEEP_DAYS * 86400:
+                old.unlink(missing_ok=True)
 
     files = []
     for a in args:
@@ -109,7 +205,7 @@ def main():
     if not files:
         sys.exit(1)
 
-    recent = load_recent()
+    recent = [r for r in load_json(RECENT, []) if pathlib.Path(r).is_file()]
     for p in files:                                      # newest first, no duplicates
         recent = [str(p)] + [r for r in recent if r != str(p)]
     recent = recent[:MAX_RECENT]
@@ -119,6 +215,7 @@ def main():
         pass
     recent_p = [pathlib.Path(r) for r in recent]
 
+    watch = {p: v for p, v in load_json(WATCH, {}).items() if now - v.get("t", 0) < WATCH_HOURS * 3600}
     done = set()
     for p in files:
         root = p.parent
@@ -129,12 +226,17 @@ def main():
             if t in done:
                 continue
             # a recent file outside this folder gets only itself in its folder list
-            if t in folder:
-                ok = write_view(t, folder, root, recent_p, template)
-            else:
-                ok = write_view(t, [t], t.parent, recent_p, template)
-            if ok:
+            mt = write_view(t, folder, root, recent_p, template) if t in folder else \
+                 write_view(t, [t], t.parent, recent_p, template)
+            if mt:
                 done.add(t)
+                watch[str(t)] = {"live": str(live_path(t)), "mtime": mt, "t": now}
+    try:
+        write_atomic(WATCH, json.dumps(watch))
+    except Exception:
+        pass
+    start_watcher()
+    for p in files:
         subprocess.Popen(["xdg-open", str(view_path(p))], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 

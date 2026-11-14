@@ -72,6 +72,15 @@ select.btn{padding:4px 6px}
 #toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--panel);color:var(--text);border:1px solid var(--line);
   border-radius:10px;padding:8px 10px 8px 14px;font:13px var(--sans);box-shadow:0 6px 24px rgba(0,0,0,.18);display:flex;gap:10px;align-items:center;z-index:50;transition:opacity .4s}
 #toast[hidden]{display:none}
+#live{font:600 11.5px var(--sans);color:#2da44e;letter-spacing:.02em;white-space:nowrap;transition:color .3s}
+#live.flash{color:var(--accent)}
+#find{position:absolute;right:14px;top:calc(100% + 8px);display:flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--line);
+  border-radius:10px;padding:6px 8px;box-shadow:0 6px 24px rgba(0,0,0,.18)}
+#findQ{font:14px var(--sans);width:220px;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:5px 8px;outline:none}
+#findQ:focus{border-color:var(--accent)}
+#findN{font:12px var(--sans);color:var(--muted);min-width:48px;text-align:center;font-variant-numeric:tabular-nums}
+#doc mark.hit{background:#ffe066;color:#111;border-radius:2px;padding:0;box-shadow:0 0 0 1px #ffe066}
+#doc mark.hit.cur{background:#ff9632;box-shadow:0 0 0 2px #ff9632}
 #toc .l2{padding-left:16px}#toc .l3{padding-left:28px;font-size:12.5px}#toc .l4{padding-left:40px;font-size:12px}
 main{flex:1;min-width:0;padding:40px 24px 120px}
 
@@ -158,7 +167,9 @@ body.dragging::after{content:"Drop .md file";position:fixed;inset:0;display:grid
 <div class="bar">
   <button class="btn icon" id="tocBtn" title="Contents">☰</button>
   <span class="name" id="fname">Markdown Reader</span>
+  <span id="live" hidden title="Live: updates when the file is saved">● Live</span>
   <span class="sp"></span>
+  <button class="btn icon" id="findBtn" title="Search (Ctrl+F or /)">🔍</button>
   <button class="btn" id="openBtn">Open .md</button>
   <select class="btn" id="font" title="Typeface"><option value="serif">Serif</option><option value="sans">Sans</option></select>
   <button class="btn icon" id="smaller" title="Smaller text">A−</button>
@@ -167,6 +178,13 @@ body.dragging::after{content:"Drop .md file";position:fixed;inset:0;display:grid
   <select class="btn" id="theme" title="Theme"><option value="light">Light</option><option value="sepia">Sepia</option><option value="dark">Dark</option></select>
   <input type="file" id="file" accept=".md,.markdown,.mdown,.mkd,.txt,text/markdown,text/plain" hidden>
   <div id="progress"></div>
+  <div id="find" hidden>
+    <input id="findQ" type="search" placeholder="Search in document…" autocomplete="off" spellcheck="false">
+    <span id="findN"></span>
+    <button class="btn icon" id="findPrev" title="Previous (Shift+Enter)">↑</button>
+    <button class="btn icon" id="findNext" title="Next (Enter)">↓</button>
+    <button class="btn icon" id="findX" title="Close (Esc)">✕</button>
+  </div>
 </div>
 
 <div class="wrap">
@@ -281,7 +299,15 @@ marked.use({
 });
 
 /* ---------- render ---------- */
-async function render(src, name){
+let renderBusy = false, renderNext = null;
+async function render(src, name, opts = {}){
+  if (renderBusy) { renderNext = [src, name, opts]; return; }
+  renderBusy = true;
+  try { await renderNow(src, name, opts); } finally { renderBusy = false; }
+  if (renderNext) { const n = renderNext; renderNext = null; render(...n); }
+}
+async function renderNow(src, name, opts){
+  const live = !!opts.live, keepY = document.documentElement.scrollTop;
   for (const k in slugCount) delete slugCount[k];
   src = src.replace(/^﻿/, '').replace(/^---\n[\s\S]*?\n---\n/, ''); // strip BOM + YAML front-matter
   const { text, store: mstore } = protectMath(src);
@@ -292,6 +318,7 @@ async function render(src, name){
 
   const doc = $('#doc');
   doc.innerHTML = html;
+  if (live) scrollTo(0, keepY);
   doc.hidden = false; $('#drop').hidden = true;
   $('#fname').textContent = name; document.title = name.replace(/\.(md|markdown)$/i,'') + ' — Markdown Reader';
 
@@ -308,11 +335,12 @@ async function render(src, name){
   posKey = 'mdr-pos:' + (M && M.path ? M.path : name);
   restoring = true;
   buildToc(heads);
-  scrollTo(0, 0);
+  if (!live) scrollTo(0, 0); else scrollTo(0, keepY);
   try { MathJax.typesetClear([doc]); await MathJax.typesetPromise([doc]); } catch (e) { console.warn(e); }
   await rerunMermaid();
   restoring = false;
-  restorePos();
+  if (live) { scrollTo(0, keepY); if (!$('#find').hidden && $('#findQ').value) runFind($('#findQ').value, true); }
+  else restorePos();
 }
 
 const M = window.__MD || null;
@@ -458,6 +486,82 @@ document.addEventListener('click', e => {
   const t = document.getElementById(decodeURIComponent(a.getAttribute('href').slice(1)));
   if (t) { e.preventDefault(); t.scrollIntoView({behavior:'smooth'}); }
 });
+
+/* ---------- search in document ---------- */
+let hits = [], hitI = -1, findTm = null;
+function clearFind(){
+  document.querySelectorAll('#doc mark.hit').forEach(m => { const p = m.parentNode; p.replaceChild(document.createTextNode(m.textContent), m); p.normalize(); });
+  hits = []; hitI = -1;
+}
+function runFind(q, keepPlace){
+  const prev = hitI;
+  clearFind();
+  if (!q) { $('#findN').textContent = ''; return; }
+  const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+  const walker = document.createTreeWalker($('#doc'), NodeFilter.SHOW_TEXT, { acceptNode(n){
+    const p = n.parentElement;
+    if (!n.nodeValue.trim() || !p || p.closest('mjx-container, svg, script, style, .anchor, .lang, .copy')) return NodeFilter.FILTER_REJECT;
+    return NodeFilter.FILTER_ACCEPT; } });
+  const nodes = []; while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const n of nodes) {
+    const t = n.nodeValue; re.lastIndex = 0; let m, last = 0, frag = null;
+    while ((m = re.exec(t))) {
+      frag = frag || document.createDocumentFragment();
+      frag.append(t.slice(last, m.index));
+      const mk = document.createElement('mark'); mk.className = 'hit'; mk.textContent = m[0];
+      frag.append(mk); hits.push(mk); last = m.index + m[0].length;
+    }
+    if (frag) { frag.append(t.slice(last)); n.parentNode.replaceChild(frag, n); }
+  }
+  if (!hits.length) { $('#findN').textContent = '0/0'; return; }
+  if (keepPlace && prev >= 0) gotoHit(Math.min(prev, hits.length - 1), false);
+  else { const i = hits.findIndex(h => h.getBoundingClientRect().top > 70); gotoHit(i < 0 ? 0 : i); }
+}
+function gotoHit(i, scroll = true){
+  if (!hits.length) return;
+  if (hits[hitI]) hits[hitI].classList.remove('cur');
+  hitI = (i + hits.length) % hits.length;
+  const h = hits[hitI]; h.classList.add('cur');
+  const d = h.closest('details'); if (d) d.open = true;
+  if (scroll) h.scrollIntoView({ block: 'center' });
+  $('#findN').textContent = `${hitI + 1}/${hits.length}`;
+}
+function openFind(){ if ($('#doc').hidden) return; $('#find').hidden = false; $('#findQ').focus(); $('#findQ').select(); if ($('#findQ').value) runFind($('#findQ').value); }
+function closeFind(){ $('#find').hidden = true; clearFind(); $('#findN').textContent = ''; }
+$('#findBtn').onclick = () => $('#find').hidden ? openFind() : closeFind();
+$('#findQ').addEventListener('input', e => { clearTimeout(findTm); findTm = setTimeout(() => runFind(e.target.value), 150); });
+$('#findQ').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); if (!hits.length) runFind(e.target.value); else gotoHit(hitI + (e.shiftKey ? -1 : 1)); }
+  if (e.key === 'Escape') closeFind();
+});
+$('#findPrev').onclick = () => gotoHit(hitI - 1);
+$('#findNext').onclick = () => gotoHit(hitI + 1);
+$('#findX').onclick = closeFind;
+addEventListener('keydown', e => {
+  const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') { if (!$('#doc').hidden) { e.preventDefault(); openFind(); } }
+  else if (e.key === '/' && !typing) { e.preventDefault(); openFind(); }
+  else if (e.key === 'Escape' && !$('#find').hidden) closeFind();
+});
+
+/* ---------- live reload: the mdview watcher rewrites a small .live.js when the file is saved ---------- */
+if (window.__MD && window.__MD.live) {
+  let curMtime = window.__MD.mtime;
+  window.__mdLive = (mt, text) => {
+    if (!mt || mt === curMtime || text == null) return;
+    curMtime = mt; window.__MD.text = text;
+    render(text, window.__MD.name, { live: true });
+    const l = $('#live'); l.classList.add('flash'); l.textContent = '● Updated'; setTimeout(() => { l.classList.remove('flash'); l.textContent = '● Live'; }, 1500);
+  };
+  $('#live').hidden = false;
+  setInterval(() => {
+    if (document.hidden) return;
+    const s = document.createElement('script');
+    s.src = window.__MD.live + '?' + Date.now();
+    s.onload = s.onerror = () => s.remove();
+    document.head.appendChild(s);
+  }, 1000);
+}
 
 /* opened by the mdview launcher: file content is embedded in window.__MD */
 if (window.__MD) {
