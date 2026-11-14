@@ -1,37 +1,141 @@
 #!/usr/bin/env python3
-"""mdview FILE.md  - open a Markdown file in the Markdown Reader (browser)."""
-import sys, os, json, time, html, subprocess, pathlib
+"""mdview FILE.md ...   open Markdown files in the Markdown Reader (browser)
+   mdview --default    make Markdown Reader the default app for .md files"""
+import sys, os, json, time, html, re, hashlib, subprocess, pathlib
 
 HOME = pathlib.Path.home()
 BASE = HOME / "mdreader"                 # visible folder: snap Firefox cannot read hidden dirs or /tmp
-TEMPLATE = pathlib.Path("/usr/share/mdreader/reader.html")
 VIEWS = BASE / "views"
+RECENT = BASE / "recent.json"
+TEMPLATE = pathlib.Path("/usr/share/mdreader/reader.html")
+if not TEMPLATE.exists():                # fallback for a home-folder install
+    TEMPLATE = BASE / "reader.html"
+
+MD_EXT = {".md", ".markdown", ".mdown", ".mkd"}
+MAX_FOLDER = 300                         # files prepared per folder
+MAX_BYTES = 3 * 1024 * 1024              # skip huge files in the folder list
+MAX_RECENT = 15
+MAX_DEPTH = 2                            # subfolder levels included in the folder list
+SKIP_DIRS = {"node_modules", "build", "dist", "venv", "__pycache__", "_archive"}
+KEEP_DAYS = 2
+
+
+def view_path(p):
+    stem = re.sub(r"[^\w.-]+", "_", p.stem)[:50] or "file"
+    return VIEWS / f"{stem}-{hashlib.sha1(str(p).encode()).hexdigest()[:8]}.html"
+
+
+def natural(p):
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", p.name)]
+
+
+def collect(root):
+    """.md files in root and its subfolders (MAX_DEPTH levels), hidden and junk folders skipped."""
+    out = []
+    for dirpath, dirs, names in os.walk(root):
+        d = pathlib.Path(dirpath)
+        depth = len(d.relative_to(root).parts)
+        dirs[:] = [x for x in dirs if not x.startswith(".") and x not in SKIP_DIRS] if depth < MAX_DEPTH else []
+        for n in names:
+            f = d / n
+            try:
+                if f.suffix.lower() in MD_EXT and f.stat().st_size <= MAX_BYTES:
+                    out.append(f)
+            except OSError:
+                pass
+        if len(out) > MAX_FOLDER * 2:
+            break
+    def key(f):                                          # files before subfolders at every level
+        parts = f.relative_to(root).parts
+        return [(1, natural_part(x)) for x in parts[:-1]] + [(0, natural_part(parts[-1]))]
+    out.sort(key=key)
+    return out[:MAX_FOLDER]
+
+
+def natural_part(s):
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
+
+
+def load_recent():
+    try:
+        return [x for x in json.loads(RECENT.read_text()) if pathlib.Path(x).is_file()]
+    except Exception:
+        return []
+
+
+def write_view(p, folder, root, recent, template):
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return False
+    data = {
+        "text": text, "name": p.name, "path": str(p), "dir": str(p.parent), "root": str(root),
+        "folder": [{"name": str(f.relative_to(root)), "path": str(f), "view": view_path(f).as_uri()} for f in folder],
+        "recent": [{"name": r.name, "path": str(r), "dir": str(r.parent), "view": view_path(r).as_uri()} for r in recent],
+    }
+    payload = json.dumps(data).replace("</", "<\\/")
+    base_href = html.escape(p.parent.as_uri() + "/", quote=True)   # relative images resolve next to the .md
+    inject = f'<base href="{base_href}">\n<script>window.__MD={payload};</script>\n'
+    view_path(p).write_text(template.replace("<head>", "<head>\n" + inject, 1), encoding="utf-8")
+    return True
+
 
 def main():
-    if len(sys.argv) >= 2 and sys.argv[1] == "--default":
+    args = sys.argv[1:]
+    if args and args[0] == "--default":
         for m in ("text/markdown", "text/x-markdown"):
             subprocess.run(["xdg-mime", "default", "mdreader.desktop", m])
-        print("Markdown Reader is now the default app for .md files"); return
-    if len(sys.argv) < 2:
-        print("usage: mdview FILE.md ...   |   mdview --default  (make it the default .md app)"); sys.exit(1)
+        print("Markdown Reader is now the default app for .md files")
+        return
+    if not args:
+        print(__doc__); sys.exit(1)
     if not TEMPLATE.exists():
         print(f"NOT FOUND: {TEMPLATE}"); sys.exit(1)
     VIEWS.mkdir(parents=True, exist_ok=True)
+    template = TEMPLATE.read_text(encoding="utf-8")
+
     now = time.time()
-    for old in VIEWS.glob("*.html"):            # keep the folder small: drop views older than 2 days
-        if now - old.stat().st_mtime > 2 * 86400:
+    for old in VIEWS.glob("*.html"):                     # views not refreshed for KEEP_DAYS are removed
+        if now - old.stat().st_mtime > KEEP_DAYS * 86400:
             old.unlink(missing_ok=True)
-    for arg in sys.argv[1:]:
-        p = pathlib.Path(arg.replace("file://", "")).expanduser().resolve()
-        if not p.is_file():
-            print(f"NOT FOUND: {p}"); continue
-        text = p.read_text(encoding="utf-8", errors="replace")
-        payload = json.dumps({"text": text, "name": p.name}).replace("</", "<\\/")
-        base_href = html.escape(p.parent.as_uri() + "/", quote=True)   # relative images resolve next to the .md
-        inject = f'<base href="{base_href}">\n<script>window.__MD={payload};</script>\n'
-        page = TEMPLATE.read_text(encoding="utf-8").replace("<head>", "<head>\n" + inject, 1)
-        out = VIEWS / (p.stem[:60] + f"-{int(now*1000)%100000}.html")
-        out.write_text(page, encoding="utf-8")
-        subprocess.Popen(["xdg-open", str(out)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    files = []
+    for a in args:
+        p = pathlib.Path(a.replace("file://", "")).expanduser().resolve()
+        if p.is_file():
+            files.append(p)
+        else:
+            print(f"NOT FOUND: {p}")
+    if not files:
+        sys.exit(1)
+
+    recent = load_recent()
+    for p in files:                                      # newest first, no duplicates
+        recent = [str(p)] + [r for r in recent if r != str(p)]
+    recent = recent[:MAX_RECENT]
+    try:
+        RECENT.write_text(json.dumps(recent, indent=0))
+    except Exception:
+        pass
+    recent_p = [pathlib.Path(r) for r in recent]
+
+    done = set()
+    for p in files:
+        root = p.parent
+        folder = collect(root)
+        if p not in folder:
+            folder.insert(0, p)
+        for t in list(folder) + recent_p:                # prepare folder files + recent so sidebar links work
+            if t in done:
+                continue
+            # a recent file outside this folder gets only itself in its folder list
+            if t in folder:
+                ok = write_view(t, folder, root, recent_p, template)
+            else:
+                ok = write_view(t, [t], t.parent, recent_p, template)
+            if ok:
+                done.add(t)
+        subprocess.Popen(["xdg-open", str(view_path(p))], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
 
 main()

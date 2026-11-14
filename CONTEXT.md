@@ -30,6 +30,7 @@ Read-only Markdown viewer for Ubuntu. Double-click a .md (or `mdview FILE.md`, a
 
 ## History
 - 1.0.0 (15 Nov): first release.
+- 1.1.1 (15 Nov): Folder view (sidebar tabs Contents | Folder | Recent; Folder = .md files in the opened file's folder + 2 subfolder levels, skipping hidden dirs, node_modules, build, dist, venv, _archive; max 300; files before subfolders), Recent = last 15 files (~/mdreader/recent.json); mdview prepares a view for each (name = stem-sha1(path)[:8].html), links open in the same tab, content as of the mdview run. Reading position per file (localStorage mdr-pos:<path>), restored after MathJax/Mermaid, 'Start from top' toast. Fix: [hidden]{display:none!important} (author display:flex was overriding the hidden attribute).
 - 1.0.1 (15 Nov): fixed text shaking at page bottom (horizontal overflow toggling a scrollbar). Fix: html/body overflow-x:clip, scrollbar-gutter:stable, overflow-anchor:none, scroll handler throttled with rAF, progress bar uses transform.
 
 ## Release routine
@@ -51,7 +52,7 @@ Rule: never put platform paths, keys or private notes in this repo (public).
 4. Links between notes: a link to another .md opens it in the reader.
 5. Book tags: show @recall, @step, @check, @solved etc. as styled boxes (paste files read like the book).
 6. Print / PDF: clean handout layout, page breaks before chapters.
-7. Folder view: sidebar listing all .md files in the folder.
+7. DONE 1.1.1 - Folder view: sidebar listing all .md files in the folder.
 8. Presentation mode: each --- or # heading becomes a full-screen slide (teach from notes).
 9. Focus mode: hide bar and contents, dim all but the current paragraph.
-10. Recent files + reading position: reopen a file where you left off.
+10. DONE 1.1.1 - Recent files + reading position: reopen a file where you left off.

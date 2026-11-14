@@ -39,6 +39,7 @@ html,body{margin:0}
 html{scrollbar-gutter:stable;overflow-x:clip;overscroll-behavior-y:none}
 body{overflow-x:clip;min-height:100vh}
 *{overflow-anchor:none}
+[hidden]{display:none !important}
 body{background:var(--bg);color:var(--text);font-family:var(--sans);transition:background .2s,color .2s}
 
 /* top bar */
@@ -61,6 +62,16 @@ select.btn{padding:4px 6px}
 #toc a{display:block;color:var(--muted);text-decoration:none;padding:3px 6px;border-radius:5px;line-height:1.35}
 #toc a:hover{color:var(--text);background:var(--panel)}
 #toc a.on{color:var(--accent);background:var(--panel)}
+#toc .tabs{display:flex;gap:2px;margin:-6px 0 14px;border-bottom:1px solid var(--line)}
+#toc .tabs button{flex:1;font:500 12px var(--sans);color:var(--muted);background:none;border:0;border-bottom:2px solid transparent;padding:6px 2px;cursor:pointer}
+#toc .tabs button.on{color:var(--accent);border-bottom-color:var(--accent)}
+#toc .dir{font-size:11.5px;color:var(--muted);margin:0 0 8px 6px;word-break:break-all}
+#toc a.cur{color:var(--text);font-weight:600;background:var(--panel)}
+#toc a small{display:block;font-size:11px;color:var(--muted);opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#toc .empty{color:var(--muted);font-style:italic;padding:4px 6px}
+#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--panel);color:var(--text);border:1px solid var(--line);
+  border-radius:10px;padding:8px 10px 8px 14px;font:13px var(--sans);box-shadow:0 6px 24px rgba(0,0,0,.18);display:flex;gap:10px;align-items:center;z-index:50;transition:opacity .4s}
+#toast[hidden]{display:none}
 #toc .l2{padding-left:16px}#toc .l3{padding-left:28px;font-size:12.5px}#toc .l4{padding-left:40px;font-size:12px}
 main{flex:1;min-width:0;padding:40px 24px 120px}
 
@@ -159,7 +170,12 @@ body.dragging::after{content:"Drop .md file";position:fixed;inset:0;display:grid
 </div>
 
 <div class="wrap">
-  <nav id="toc" class="hidden"></nav>
+  <nav id="toc" class="hidden">
+    <div class="tabs" id="tabs" hidden><button data-p="toc" class="on">Contents</button><button data-p="folder">Folder</button><button data-p="recent">Recent</button></div>
+    <div id="pane-toc" class="pane"></div>
+    <div id="pane-folder" class="pane" hidden></div>
+    <div id="pane-recent" class="pane" hidden></div>
+  </nav>
   <main>
     <div id="drop">
       <h1>Markdown Reader</h1>
@@ -171,6 +187,7 @@ body.dragging::after{content:"Drop .md file";position:fixed;inset:0;display:grid
       <textarea id="paste" placeholder="…or paste Markdown here and press Ctrl/⌘ + Enter"></textarea>
     </div>
     <article id="doc" hidden></article>
+    <div id="toast" hidden><span>Resumed where you left off</span><button class="btn" id="toTop">Start from top</button></div>
   </main>
 </div>
 
@@ -288,20 +305,62 @@ async function render(src, name){
     setTimeout(() => b.textContent='Copy', 1400);
   });
 
+  posKey = 'mdr-pos:' + (M && M.path ? M.path : name);
+  restoring = true;
   buildToc(heads);
   scrollTo(0, 0);
   try { MathJax.typesetClear([doc]); await MathJax.typesetPromise([doc]); } catch (e) { console.warn(e); }
-  rerunMermaid();
+  await rerunMermaid();
+  restoring = false;
+  restorePos();
 }
 
+const M = window.__MD || null;
 function buildToc(heads){
-  const toc = $('#toc');
-  if (heads.length < 2) { toc.innerHTML=''; toc.classList.add('hidden'); return; }
-  const min = Math.min(...heads.map(h => +h.tagName[1]));
-  toc.innerHTML = '<div class="t">Contents</div>' + heads.map(h =>
-    `<a href="#${h.id}" class="l${+h.tagName[1] - min + 1}">${esc(h.textContent.replace(/#$/,''))}</a>`).join('');
-  toc.classList.remove('hidden');
+  const toc = $('#toc'), min = heads.length ? Math.min(...heads.map(h => +h.tagName[1])) : 1;
+  $('#pane-toc').innerHTML = heads.length
+    ? heads.map(h => `<a href="#${h.id}" class="l${+h.tagName[1] - min + 1}">${esc(h.textContent.replace(/#$/,''))}</a>`).join('')
+    : '<div class="empty">No headings</div>';
+  const hasFolder = M && M.folder && M.folder.length > 1, hasRecent = M && M.recent && M.recent.length > 1;
+  if (M) {
+    $('#pane-folder').innerHTML = `<div class="dir">${esc(M.root || M.dir)}</div>` + (M.folder || []).map(f => {
+      const i = f.name.lastIndexOf('/');
+      const label = i < 0 ? esc(f.name) : `${esc(f.name.slice(i + 1))}<small>${esc(f.name.slice(0, i))}/</small>`;
+      return `<a href="${f.view}" class="${f.path === M.path ? 'cur' : ''}">${label}</a>`;
+    }).join('') || '<div class="empty">No other files</div>';
+    $('#pane-recent').innerHTML = (M.recent || []).map(f =>
+      `<a href="${f.view}" class="${f.path === M.path ? 'cur' : ''}">${esc(f.name)}<small>${esc(f.dir)}</small></a>`).join('') || '<div class="empty">Nothing yet</div>';
+  }
+  $('#tabs').hidden = !M;
+  toc.classList.toggle('hidden', heads.length < 2 && !M);
+  showPane(store.get('mdr-pane', 'toc'));
 }
+function showPane(p){
+  if ($('#tabs').hidden) p = 'toc';
+  ['toc','folder','recent'].forEach(x => { $('#pane-' + x).hidden = x !== p; });
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.p === p));
+  const cur = $('#pane-' + p + ' a.cur'); if (cur) cur.scrollIntoView({block:'nearest'});
+}
+$('#tabs').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; store.set('mdr-pane', b.dataset.p); showPane(b.dataset.p); });
+
+/* reading position: remembered per file */
+let posKey = null, restoring = false;
+function savePos(){
+  if (!posKey || restoring) return;
+  const h = document.documentElement, max = h.scrollHeight - h.clientHeight;
+  store.set(posKey, JSON.stringify({ f: max > 0 ? h.scrollTop / max : 0, t: Date.now() }));
+}
+function restorePos(){
+  if (location.hash) return;
+  let v; try { v = JSON.parse(store.get(posKey, 'null')); } catch { v = null; }
+  if (!v || !(v.f > 0.01)) return;
+  const h = document.documentElement;
+  restoring = true; scrollTo(0, v.f * (h.scrollHeight - h.clientHeight)); setTimeout(() => restoring = false, 300);
+  const t = $('#toast'); t.hidden = false; t.style.opacity = 1;
+  clearTimeout(restorePos.tm); restorePos.tm = setTimeout(() => { t.style.opacity = 0; setTimeout(() => t.hidden = true, 400); }, 5000);
+}
+$('#toTop').onclick = () => { scrollTo({top:0, behavior:'smooth'}); $('#toast').hidden = true; };
+addEventListener('pagehide', savePos);
 
 let mermaidN = 0;
 async function rerunMermaid(){
@@ -321,13 +380,14 @@ addEventListener('scroll', () => {
   if (ticking) return; ticking = true;
   requestAnimationFrame(() => {
     ticking = false;
+    clearTimeout(savePos.tm); savePos.tm = setTimeout(savePos, 400);
     const h = document.documentElement; const p = Math.min(1, h.scrollTop / Math.max(1, h.scrollHeight - h.clientHeight));
     $('#progress').style.transform = `scaleX(${p})`;
     const heads = document.querySelectorAll('#doc :is(h1,h2,h3,h4)');
     let cur = heads[0]; for (const x of heads) { if (x.getBoundingClientRect().top < 90) cur = x; else break; }
     const id = cur ? cur.id : null;
     if (id === lastOn) return; lastOn = id;
-    document.querySelectorAll('#toc a').forEach(a => a.classList.toggle('on', a.getAttribute('href') === '#' + id));
+    document.querySelectorAll('#pane-toc a').forEach(a => a.classList.toggle('on', a.getAttribute('href') === '#' + id));
   });
 }, { passive: true });
 
