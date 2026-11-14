@@ -2,9 +2,9 @@
 Type=Application
 Name=Markdown Reader
 Comment=Read Markdown files with clean formatting
-Exec=/usr/bin/mdview %F
+Exec=/usr/bin/mdview %U
 Icon=accessories-text-editor
 Terminal=false
-MimeType=text/markdown;text/x-markdown;
+MimeType=text/markdown;text/x-markdown;x-scheme-handler/mdreader;
 Categories=Office;Viewer;
 NoDisplay=false

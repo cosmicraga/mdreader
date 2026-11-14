@@ -4,7 +4,7 @@ A clean, read-only Markdown viewer. Double-click a `.md` file and it opens in yo
 
 **Renders:** GitHub tables and task lists · LaTeX maths (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`, `align`) via MathJax · code highlighting · Mermaid diagrams · GitHub callouts (`> [!TIP]`) · `==highlight==` · relative images next to the file.
 
-**Reading:** live reload (the page updates when you save the file) · search in document (Ctrl+F or `/`, Enter / Shift+Enter) · sidebar tabs Contents | Folder | Recent · resumes where you left off · light / sepia / dark · serif or sans · text size · wide layout · reading progress bar.
+**Reading:** live reload (the page updates when you save the file) · search in document (Ctrl+F or `/`, Enter / Shift+Enter) · sidebar tabs Contents | Folder | Recent · resumes where you left off · 📂 show the file in the folder · light / sepia / dark · serif or sans · text size · wide layout · reading progress bar.
 
 ## Install
 
@@ -28,6 +28,7 @@ Optional alias: `echo "alias md='mdview'" >> ~/.bashrc`
 
 - Needs internet: MathJax, highlight.js and Mermaid load from cdnjs.
 - Each opened file is written as a page to `~/mdreader/views/` (removed after 2 days). Folder view covers the file's folder and 2 subfolder levels.
+- 📂 Show in folder uses an `mdreader://` link handled by mdview (opens Files with the file selected). Chrome asks once to open xdg-open: tick "Always allow".
 - Live reload: `mdview` starts a small background watcher (one per user) that follows the prepared files for 24 hours.
 - `src/reader.html` also works on its own: open it in a browser and drop a `.md` file on it.
 

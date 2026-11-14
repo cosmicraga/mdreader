@@ -50,6 +50,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);transition:b
 .btn{font:inherit;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:5px 10px;cursor:pointer}
 .btn:hover{border-color:var(--accent)}
 .btn.icon{padding:5px 9px}
+a.btn{text-decoration:none;display:inline-block;line-height:1.35}
 select.btn{padding:4px 6px}
 #progress{position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--accent);transform:scaleX(0);transform-origin:0 50%;will-change:transform}
 
@@ -169,6 +170,7 @@ body.dragging::after{content:"Drop .md file";position:fixed;inset:0;display:grid
   <span class="name" id="fname">Markdown Reader</span>
   <span id="live" hidden title="Live: updates when the file is saved">● Live</span>
   <span class="sp"></span>
+  <a class="btn icon" id="revealBtn" hidden title="Show in folder">📂</a>
   <button class="btn icon" id="findBtn" title="Search (Ctrl+F or /)">🔍</button>
   <button class="btn" id="openBtn">Open .md</button>
   <select class="btn" id="font" title="Typeface"><option value="serif">Serif</option><option value="sans">Sans</option></select>
@@ -543,6 +545,14 @@ addEventListener('keydown', e => {
   else if (e.key === '/' && !typing) { e.preventDefault(); openFind(); }
   else if (e.key === 'Escape' && !$('#find').hidden) closeFind();
 });
+
+/* ---------- show in folder: mdreader:// link handled by mdview (opens the file manager) ---------- */
+if (window.__MD && window.__MD.path) {
+  const r = $('#revealBtn');
+  r.href = 'mdreader://reveal?path=' + encodeURIComponent(window.__MD.path);
+  r.title = 'Show in folder: ' + window.__MD.dir;
+  r.hidden = false;
+}
 
 /* ---------- live reload: the mdview watcher rewrites a small .live.js when the file is saved ---------- */
 if (window.__MD && window.__MD.live) {
