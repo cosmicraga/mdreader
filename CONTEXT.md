@@ -7,7 +7,6 @@ Read-only Markdown viewer for Ubuntu. Double-click a .md (or `mdview FILE.md`, a
 - Releases: GitHub Releases, asset always named `mdreader_all.deb` so
   `https://github.com/cosmicraga/mdreader/releases/latest/download/mdreader_all.deb` is the stable install link.
 - Installed on the laptop as the deb (v1.3.0): /usr/bin/mdview, /usr/share/mdreader/reader.html, /usr/share/applications/mdreader.desktop. Default .md app via `mdview --default` (xdg-mime, per user).
-- Hosted copy (drag-drop only): claude.ai artifact "Markdown Reader" (slug 5c6dd861-b300-4afe-b4a0-2e94563e0291).
 - Alias in ~/.bashrc: `alias md='mdview'`.
 
 ## Files
@@ -38,7 +37,7 @@ Read-only Markdown viewer for Ubuntu. Double-click a .md (or `mdview FILE.md`, a
 
 ## Release routine
 1. Edit src/ ; bump `Version:` in debian/control.
-2. `./build.sh && sudo apt install ./mdreader_all.deb` ; test with `mdview ~/code/infra/NOW.md`.
+2. `./build.sh && sudo apt install ./mdreader_all.deb` ; test with `mdview any-file.md`.
 3. `git add -A && git commit -m "X.Y.Z: ..." && git push`
 4. `gh release create vX.Y.Z mdreader_all.deb --title "Markdown Reader X.Y.Z" --notes "..."`
 Rule: never put platform paths, keys or private notes in this repo (public).
