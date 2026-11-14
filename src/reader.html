@@ -35,7 +35,10 @@ window.MathJax = {
   --accent:#8a4b16; --code-bg:#ece2c9; --quote:#7a5a2a; --mark:#f3d98a;
 }
 *{box-sizing:border-box}
-html,body{margin:0;height:100%}
+html,body{margin:0}
+html{scrollbar-gutter:stable;overflow-x:clip;overscroll-behavior-y:none}
+body{overflow-x:clip;min-height:100vh}
+*{overflow-anchor:none}
 body{background:var(--bg);color:var(--text);font-family:var(--sans);transition:background .2s,color .2s}
 
 /* top bar */
@@ -47,11 +50,11 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);transition:b
 .btn:hover{border-color:var(--accent)}
 .btn.icon{padding:5px 9px}
 select.btn{padding:4px 6px}
-#progress{position:absolute;left:0;bottom:-1px;height:2px;background:var(--accent);width:0}
+#progress{position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--accent);transform:scaleX(0);transform-origin:0 50%;will-change:transform}
 
 /* layout */
 .wrap{display:flex;align-items:flex-start}
-#toc{position:sticky;top:46px;width:260px;flex:none;max-height:calc(100vh - 46px);overflow:auto;padding:22px 14px 40px 18px;
+#toc{position:sticky;top:46px;align-self:flex-start;width:260px;flex:none;max-height:calc(100vh - 46px);overflow:auto;padding:22px 14px 40px 18px;
   font-size:13px;border-right:1px solid var(--line)}
 #toc.hidden{display:none}
 #toc .t{font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-size:11px;margin-bottom:10px}
@@ -313,12 +316,19 @@ async function rerunMermaid(){
 }
 
 /* ---------- scroll progress + active TOC ---------- */
+let ticking = false, lastOn = null;
 addEventListener('scroll', () => {
-  const h = document.documentElement; const p = h.scrollTop / Math.max(1, h.scrollHeight - h.clientHeight);
-  $('#progress').style.width = (p * 100) + '%';
-  const heads = [...document.querySelectorAll('#doc :is(h1,h2,h3,h4)')];
-  let cur = heads[0]; for (const x of heads) { if (x.getBoundingClientRect().top < 90) cur = x; else break; }
-  document.querySelectorAll('#toc a').forEach(a => a.classList.toggle('on', cur && a.getAttribute('href') === '#' + cur.id));
+  if (ticking) return; ticking = true;
+  requestAnimationFrame(() => {
+    ticking = false;
+    const h = document.documentElement; const p = Math.min(1, h.scrollTop / Math.max(1, h.scrollHeight - h.clientHeight));
+    $('#progress').style.transform = `scaleX(${p})`;
+    const heads = document.querySelectorAll('#doc :is(h1,h2,h3,h4)');
+    let cur = heads[0]; for (const x of heads) { if (x.getBoundingClientRect().top < 90) cur = x; else break; }
+    const id = cur ? cur.id : null;
+    if (id === lastOn) return; lastOn = id;
+    document.querySelectorAll('#toc a').forEach(a => a.classList.toggle('on', a.getAttribute('href') === '#' + id));
+  });
 }, { passive: true });
 
 /* ---------- sample ---------- */
